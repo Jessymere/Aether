@@ -34,6 +34,7 @@ from agents import (
     workspace_context,
     ask_with_context,
     decide_proposal,
+    extract_decision,
 )
 from config import MEMORY_FILE, MODELS, RUNS, WORKSPACE
 from loop_guard import LoopGuard
