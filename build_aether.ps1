@@ -1,0 +1,41 @@
+$ErrorActionPreference = "Stop"
+
+$project = Split-Path -Parent $MyInvocation.MyCommand.Path
+Set-Location $project
+
+if (-not (Get-Command pyinstaller -ErrorAction SilentlyContinue)) {
+    throw "PyInstaller is not installed. Run: python -m pip install pyinstaller"
+}
+
+# Compile all source files to catch syntax errors before building
+python -m py_compile desktop_ui.py agents.py config.py ollama_client.py orchestrator.py system.py vault.py self_improve.py update.py voice.py web_research.py vision.py link_tools.py patch_notes.py memory_store.py proposal_validation.py loop_guard.py decisions_client.py mcp_client.py
+
+# Build the executable with all necessary hidden imports and data files
+pyinstaller --noconfirm --clean --windowed --name Aether --paths $project `
+    --hidden-import=agents `
+    --hidden-import=config `
+    --hidden-import=ollama_client `
+    --hidden-import=orchestrator `
+    --hidden-import=system `
+    --hidden-import=vault `
+    --hidden-import=self_improve `
+    --hidden-import=update `
+    --hidden-import=voice `
+    --hidden-import=web_research `
+    --hidden-import=vision `
+    --hidden-import=link_tools `
+    --hidden-import=patch_notes `
+    --hidden-import=memory_store `
+    --hidden-import=proposal_validation `
+    --hidden-import=loop_guard `
+    --hidden-import=decisions_client `
+    --hidden-import=mcp_client `
+    --add-data="vault;vault" `
+    --add-data="memory.md;." `
+    --add-data="memory.db;." `
+    --add-data="mcp_servers.json;." `
+    desktop_ui.py
+
+Write-Host "Aether executable created in $project\dist\Aether\Aether.exe"
+Write-Host "Ollama remains installed separately and supplies the local models."
+Write-Host "Data files (vault/, memory.md, memory.db, mcp_servers.json) are bundled."

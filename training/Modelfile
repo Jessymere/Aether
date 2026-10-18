@@ -1,0 +1,4 @@
+FROM ./output/gguf/local-coder-tuned_gguf/Qwen3.5-4B.Q4_K_M.gguf
+SYSTEM "You are Aether's tuned implementation agent. Return only valid JSON with summary and complete relative-path files. Never use absolute paths or .. ."
+PARAMETER temperature 0.1
+PARAMETER num_ctx 8192

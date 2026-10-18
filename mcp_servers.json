@@ -1,0 +1,34 @@
+{
+  "servers": {
+    "filesystem_project": {
+      "enabled": true,
+      "description": "Read and manage only the builder workspace.",
+      "command": "cmd",
+      "args": ["/c", "npx", "-y", "@modelcontextprotocol/server-filesystem", "C:\\Users\\jessy\\Documents\\Codex\\2026-10-16\\hey-i-have-local\\outputs\\multi_ai_builder\\workspace"]
+    },
+    "git_project": {
+      "enabled": false,
+      "description": "Inspect and manage Git history for this project.",
+      "command": "uvx",
+      "args": ["mcp-server-git", "--repository", "C:\\Users\\jessy\\Documents\\Codex\\2026-10-16\\hey-i-have-local\\outputs\\multi_ai_builder"]
+    },
+    "fetch_web": {
+      "enabled": true,
+      "description": "Fetch web pages for research and link analysis.",
+      "command": "uvx",
+      "args": ["mcp-server-fetch"]
+    },
+    "memory_graph": {
+      "enabled": true,
+      "description": "Store durable entities and relationships across sessions.",
+      "command": "cmd",
+      "args": ["/c", "npx", "-y", "@modelcontextprotocol/server-memory"]
+    },
+    "rea": {
+      "enabled": true,
+      "description": "Reverse engineer binaries, applications, and runtime behavior via the REA MCP server.",
+      "command": "cmd",
+      "args": ["/c", "npx", "-y", "rea-agents@latest", "mcp"]
+    }
+  }
+}
