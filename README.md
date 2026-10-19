@@ -190,8 +190,19 @@ The current config uses your existing model names, so creating these is optional
 
 ## Model roles
 
-- Coordinator/planner: `qwen3.5:4b`
-- Implementation: `qwen2.5-coder:7b`
-- Review: `gemma4:e4b`
+Every seat runs on a free hosted tier by default — no model download, and the
+reviewer sits on a different provider from the rest so one free tier's rate
+limit cannot stall a build.
 
-Change these in `config.py` if desired. The custom models you already installed can be assigned later after we inspect their behavior.
+- Planning and coding: `z-ai/glm-5.3` (NVIDIA NIM)
+- Review: `nvidia/nemotron-3-ultra-550b-a55b:free` (OpenRouter)
+- Security: `nvidia/nemotron-3-super-120b-a12b` (NVIDIA NIM — the 550b `ultra`
+  timed out often enough to be unreliable here)
+- Testing and release: `openai/gpt-oss-20b` (NVIDIA NIM)
+- Vision: `nvidia/nemotron-3.5-super-vl-120b-a12b` (NVIDIA NIM)
+- Intent classification / small helpers: `nvidia/nemotron-3.5-lightning-30b-a3b`, `liquid/lfm-2.5-2.6b:free`
+
+Set `NVIDIA_API_KEY` and `OPENROUTER_API_KEY` in `.env`, then run
+`python main.py --preflight` to see what resolves where. Any role can be
+pointed at a local Ollama model instead by editing `config.MODELS` — or all of
+them at once with `--fast` / `--auto-models`.

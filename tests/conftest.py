@@ -85,26 +85,111 @@ def invalid_json_proposal() -> dict:
     return {"summary": "No files"}
 
 
+def _patch_chat_everywhere(monkeypatch: pytest.MonkeyPatch, reply, stream) -> None:
+    """Patch ``chat``/``stream_chat`` on the client and on every module that
+    imported them by name.
+
+    ``from ollama_client import chat`` binds at import time, so patching the
+    client module alone leaves agents, vision and link_tools dialling out.
+    """
+    import ollama_client
+
+    monkeypatch.setattr(ollama_client, "chat", reply)
+    monkeypatch.setattr(ollama_client, "stream_chat", stream)
+    for name in ("agents", "vision", "link_tools"):
+        module = pytest.importorskip(name, reason=f"{name} unavailable")
+        if hasattr(module, "chat"):
+            monkeypatch.setattr(module, "chat", reply)
+        if hasattr(module, "stream_chat"):
+            monkeypatch.setattr(module, "stream_chat", stream)
+
+
+@pytest.fixture(autouse=True)
+def offline_models(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep every test off the network, including the hosted model providers.
+
+    Autouse because the default is now a cloud slug: without this a bare
+    ``classify_intent("")`` makes a real HTTPS call and the suite takes a
+    minute. A test that wants a specific reply just patches over this.
+    """
+    def offline_chat(base_url, model, messages, **kwargs) -> str:
+        return "chat"
+
+    _patch_chat_everywhere(monkeypatch, offline_chat, lambda *a, **k: iter(["chat"]))
+
+
 @pytest.fixture
 def mock_ollama_client(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Mock ollama_client.chat to avoid network calls during tests."""
+    """Mock chat to avoid network calls during tests."""
     from unittest.mock import MagicMock
 
-    import ollama_client
-    import agents
-
     mock_chat = MagicMock(return_value='{"summary": "test", "files": []}')
+    _patch_chat_everywhere(monkeypatch, mock_chat, lambda *a, **k: iter([]))
 
-    def mock_chat_func(
-        base_url: str,
-        model: str,
-        messages: list,
-        timeout: int = 600,
-        json_mode: bool = False,
-        num_predict: int = 2048,
-        images: list | None = None,
-        api_key: str | None = None,
-    ) -> str:
-        return mock_chat(base_url, model, messages, timeout, json_mode, num_predict, images, api_key)
 
-    monkeypatch.setattr(ollama_client, "chat", mock_chat_func)
+# ---------------------------------------------------------------------------
+# Trading desk fixtures. The desk has three network surfaces — market data,
+# the judge brain, and the broker — so tests stub all three and keep every
+# path offline, exactly like the rest of the suite.
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def desk_db(tmp_path: Path) -> Path:
+    """A throwaway desk ledger."""
+    return tmp_path / "desk.db"
+
+
+@pytest.fixture
+def stub_brain():
+    """A deterministic brain. Never calls a model."""
+    from desk_brain import StubBrain
+
+    return StubBrain(action="buy", confidence=0.9)
+
+
+@pytest.fixture
+def desk_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
+    """Point the desk's files at tmp_path and stub every network surface.
+
+    Patches names on the ``desk_runner`` module (they are imported into its
+    namespace), so nothing here reaches the real desk folder or the internet.
+    """
+    import desk_runner
+
+    desk_dir = tmp_path / "desk"
+    paths = {
+        "kill": desk_dir / "KILL",
+        "dial": desk_dir / "dial.json",
+        "logs": desk_dir / "logs",
+        "db": desk_dir / "desk.db",
+    }
+    monkeypatch.setattr(desk_runner, "DESK_KILL_FILE", paths["kill"])
+    monkeypatch.setattr(desk_runner, "DESK_DIAL_FILE", paths["dial"])
+    monkeypatch.setattr(desk_runner, "DESK_LOGS", paths["logs"])
+
+    def fake_connect(path=None):
+        from desk_ledger import connect
+
+        return connect(paths["db"])
+
+    monkeypatch.setattr(desk_runner, "connect", fake_connect)
+    # Marks never hit the network; the fallback (cost basis) is what we want.
+    monkeypatch.setattr(desk_runner.DeskRunner, "_mark",
+                        lambda self, symbol, fallback: fallback)
+    return paths
+
+
+def make_bars(n: int = 400, start: float = 100.0, step: float = 0.4) -> list:
+    """A synthetic uptrend, long enough to clear the history gate."""
+    from desk_data import Bar
+
+    return [
+        Bar(ts=f"2020-{1 + i % 12:02d}-{1 + i % 28:02d}", open=start + i * step,
+            high=start + i * step + 1, low=start + i * step - 1,
+            close=start + i * step, volume=1_000_000, symbol="SYN")
+        for i in range(n)
+    ]
+
+
+@pytest.fixture
+def synth_bars() -> list:
+    return make_bars()

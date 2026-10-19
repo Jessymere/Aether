@@ -15,7 +15,7 @@ import urllib.request
 import urllib.error
 from typing import Any, Optional
 
-from config import DECISIONS_URL, DECISION_MODEL, EXPERIENTIAL_API_KEY
+from config import DECISIONS_URL, DECISION_MODEL, GATEWAY_API_KEY
 
 
 def decide(
@@ -39,6 +39,10 @@ def decide(
     Returns:
         Parsed JSON response with 'answers' and 'usage' keys.
     """
+    # Fall back to the configured gateway key so callers that pass nothing
+    # (including decide_review below) still authenticate.
+    api_key = api_key or GATEWAY_API_KEY
+
     body = {
         "model": model,
         "input": input_text,

@@ -1,0 +1,30 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Generated at runtime
+runs/
+.aether/
+.e2e_tmp/
+backups/
+workspace/.aether/
+unsloth_compiled_cache/
+training/output/
+
+# Desk: ledger, cache, logs, kill/dial files. The code is tracked, the state is not.
+desk/
+desk.db
+
+# PyInstaller (already tracked once; these stop the churn getting worse)
+build/
+dist/
+*.spec.bak
+
+# Local model / training scratch
+training/.venv/
+training/dataset.jsonl
+training/candidates.jsonl

@@ -1,0 +1,8 @@
+# Core runtime dependency. Everything else in the builder is stdlib + Ollama HTTP.
+psutil
+
+# Optional extras live in their own files so the exe build stays lean:
+#   requirements-mcp.txt  -- MCP client for the mcp_*.py tools
+#   requirements-ui.txt   -- pywebview for the modern_ui.py native window
+#   requirements-desk.txt -- live-execution extras for the trading desk
+# Training is deliberately isolated; see training/requirements.txt.

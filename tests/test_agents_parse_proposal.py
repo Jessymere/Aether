@@ -90,3 +90,37 @@ class TestParseProposal:
         raw = '{"summary": "Nested", "files": [{"path": "src/main.py", "content": "x=1"}]}'
         proposal = parse_proposal(raw)
         assert proposal["files"][0]["path"] == "src/main.py"
+
+
+class TestParseProposalNormalisation:
+    """Models emit nulls and odd shapes; downstream code slices summary and
+    indexes item["path"], so parse_proposal must return a normalised shape."""
+
+    def test_null_summary_becomes_empty_string(self) -> None:
+        """A null summary must not survive as None (it was sliced -> TypeError)."""
+        raw = '{"summary": null, "files": [{"path": "a.py", "content": "x=1"}]}'
+        proposal = parse_proposal(raw)
+        assert proposal["summary"] == ""
+        # The exact expression the orchestrator uses when broadcasting.
+        assert (proposal["summary"] or "")[:200] == ""
+
+    def test_missing_summary_becomes_empty_string(self) -> None:
+        raw = '{"files": [{"path": "a.py", "content": "x=1"}]}'
+        proposal = parse_proposal(raw)
+        assert proposal["summary"] == ""
+
+    def test_null_content_becomes_empty_string(self) -> None:
+        raw = '{"summary": "s", "files": [{"path": "a.py", "content": null}]}'
+        proposal = parse_proposal(raw)
+        assert proposal["files"][0]["content"] == ""
+
+    def test_null_file_entry_raises_clear_error(self) -> None:
+        """A null entry in files used to raise before item["path"] existed."""
+        raw = '{"summary": "s", "files": [null]}'
+        with pytest.raises(ValueError, match="not an object"):
+            parse_proposal(raw)
+
+    def test_null_path_raises_clear_error(self) -> None:
+        raw = '{"summary": "s", "files": [{"path": null, "content": "x"}]}'
+        with pytest.raises(ValueError, match="no usable path"):
+            parse_proposal(raw)

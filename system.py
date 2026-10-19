@@ -91,20 +91,261 @@ def list_files(folder: str, limit: int = 30) -> str:
     return "\n".join(lines) if lines else "(empty folder)"
 
 
-def run_command(command: str, timeout: int = 30) -> str:
-    """Run a shell command (read-only, no destructive operations)."""
-    # Block dangerous commands
-    dangerous = ["del ", "rm ", "format", "fdisk", "shutdown", "reboot", "> ", ">> ", "|", "&"]
-    cmd_lower = command.lower()
-    for d in dangerous:
-        if d in cmd_lower:
+def run_command(command: str, timeout: int = 30, force: bool = False) -> str:
+    """Run a shell command with safety checks for destructive operations.
+
+    The command is parsed into segments separated by |, &, &&.
+    Each segment is checked for destructive verbs (del, erase, rmdir, rd, rm,
+    format, fdisk, shutdown, reboot) as the first token (after stripping
+    optional cmd /c prefixes). Pipes, backgrounding (&), and redirects are
+    allowed by default. Redirects (> or >>) to existing files are noted in the
+    returned output.
+
+    Args:
+        command: The command string to execute.
+        timeout: Timeout in seconds (default 30).
+        force: If True, bypass all safety checks.
+
+    Returns:
+        Command output as a string, or "(no output)" if there is no output.
+        If the command is blocked, returns a warning message.
+        If redirects target existing files, a warning is prepended to the output.
+    """
+    if force:
+        # Bypass safety checks
+        try:
+            result = subprocess.run(
+                command, shell=True, capture_output=True, text=True, timeout=timeout,
+            )
+            output = (result.stdout + result.stderr).strip()
+            return output if output else "(no output)"
+        except subprocess.TimeoutExpired:
+            return f"Command timed out after {timeout}s: {command}"
+        except Exception as exc:  # noqa: BLE001
+            return f"Command failed: {exc}"
+
+    # Helper: check if a segment is destructive
+    def is_destructive_segment(seg: str) -> bool:
+        """Return True if the segment's command word is a destructive verb."""
+        # Strip leading/trailing whitespace
+        seg = seg.strip()
+        if not seg:
+            return False
+
+        # Remove optional cmd /c or cmd.exe /c prefix
+        # Handle variations: cmd, cmd.exe, with /c or /k, case-insensitive
+        lowered = seg.lower()
+        if lowered.startswith("cmd ") or lowered.startswith("cmd.exe "):
+            # Remove the executable part
+            if lowered.startswith("cmd.exe "):
+                seg = seg[8:]  # len("cmd.exe ")
+            else:
+                seg = seg[4:]  # len("cmd ")
+            seg = seg.lstrip()
+            lowered = seg.lower()
+            if lowered.startswith("/c ") or lowered.startswith("/k "):
+                seg = seg[3:]  # len("/c ")
+                seg = seg.lstrip()
+            elif lowered.startswith("/c") or lowered.startswith("/k"):
+                seg = seg[2:]  # len("/c")
+                seg = seg.lstrip()
+
+        # Now split the segment into tokens by whitespace to get the first word
+        # But first, we need to handle redirects: we want to ignore anything after > or >>
+        # for the purpose of extracting the command word.
+        # We'll find the first occurrence of '>' or '>>' that is not inside quotes.
+        # For simplicity, we assume redirects are not inside quotes and are separated by spaces.
+        # We'll split the segment by spaces and look for '>' or '>>' tokens.
+        tokens = seg.split()
+        # We'll look for the first token that is a redirect and stop before it.
+        cmd_tokens = []
+        for tok in tokens:
+            if tok in (">", ">>"):
+                break
+            cmd_tokens.append(tok)
+        if not cmd_tokens:
+            # No command before redirect? Treat as empty (not destructive)
+            return False
+        cmd_word = cmd_tokens[0].lower()
+        # Destructive verbs
+        destructive_verbs = {
+            "del", "erase", "rmdir", "rd", "rm", "format",
+            "fdisk", "shutdown", "reboot"
+        }
+        return cmd_word in destructive_verbs
+
+    # Tokenize the command into segments separated by |, &, &&, respecting quotes.
+    # We'll do a simple state machine: inside_single_quote, inside_double_quote.
+    segments = []
+    current = []
+    i = 0
+    n = len(command)
+    while i < n:
+        ch = command[i]
+        if ch == "'" and not (i > 0 and command[i-1] == '\\'):
+            # Toggle single quote state
+            current.append(ch)
+            i += 1
+            # We'll just toggle a flag; for simplicity, we assume quotes are not nested.
+            # We'll keep track of being inside single quotes.
+            # Actually, we need to know when we're inside quotes to avoid splitting on | & &&
+            # Let's maintain a state.
+            # We'll refactor: we'll keep state variables.
+            # Let's restart with a clearer approach.
+            # We'll break and rewrite this part.
+            pass
+        i += 1
+
+    # Given the complexity, and since the task says a small regex/tokenizer is fine,
+    # we'll use a different approach: we'll split by spaces but then recombine tokens
+    # that are inside quotes. However, we know that the metacharacters | & && are
+    # not inside quotes in typical usage. We'll assume that quotes are used to
+    # group arguments and that | & && inside quotes are literal.
+    # We'll implement a simple tokenizer that tracks quote state.
+
+    # Let's reimplement the tokenization properly.
+    inside_single_quote = False
+    inside_double_quote = False
+    escaped = False  # handle backslash escape
+    current = []
+    segments = []
+    i = 0
+    while i < n:
+        ch = command[i]
+        if escaped:
+            escaped = False
+            current.append(ch)
+            i += 1
+            continue
+        if ch == '\\':
+            escaped = True
+            current.append(ch)
+            i += 1
+            continue
+        if ch == "'" and not inside_double_quote:
+            inside_single_quote = not inside_single_quote
+            current.append(ch)
+            i += 1
+            continue
+        if ch == '"' and not inside_single_quote:
+            inside_double_quote = not inside_double_quote
+            current.append(ch)
+            i += 1
+            continue
+        # Check for |, &, && when not inside quotes
+        if not inside_single_quote and not inside_double_quote:
+            if ch == '|':
+                # Check for ||? We treat | and || as pipe? The task says | and & and &&
+                # We'll treat | as pipe, && as and-operator, & as background.
+                # We'll split on |, &, &&.
+                # We need to look ahead for &&.
+                if i + 1 < n and command[i+1] == '&':
+                    # && operator
+                    segments.append(''.join(current))
+                    current = []
+                    i += 2
+                    continue
+                else:
+                    # | pipe
+                    segments.append(''.join(current))
+                    current = []
+                    i += 1
+                    continue
+            if ch == '&':
+                # Check for && already handled above? We are at a single &
+                # We'll treat & as background operator.
+                segments.append(''.join(current))
+                current = []
+                i += 1
+                continue
+        # Otherwise, add character to current segment
+        current.append(ch)
+        i += 1
+
+    # Add the last segment
+    if current or not segments:
+        segments.append(''.join(current))
+
+    # Now we have a list of segments (strings) that are separated by |, &, &&.
+    # Check each segment for destructiveness.
+    for seg in segments:
+        if is_destructive_segment(seg):
+            # Find the destructive verb for the message
+            # We'll reuse is_destructive_segment to get the verb? Let's modify to return the verb.
+            # For simplicity, we'll compute again.
+            seg_stripped = seg.strip()
+            lowered = seg_stripped.lower()
+            if lowered.startswith("cmd ") or lowered.startswith("cmd.exe "):
+                if lowered.startswith("cmd.exe "):
+                    seg_stripped = seg_stripped[8:]
+                else:
+                    seg_stripped = seg_stripped[4:]
+                seg_stripped = seg_stripped.lstrip()
+                lowered = seg_stripped.lower()
+                if lowered.startswith("/c ") or lowered.startswith("/k "):
+                    seg_stripped = seg_stripped[3:]
+                    seg_stripped = seg_stripped.lstrip()
+                elif lowered.startswith("/c") or lowered.startswith("/k"):
+                    seg_stripped = seg_stripped[2:]
+                    seg_stripped = seg_stripped.lstrip()
+            # Now get first token before redirects
+            tokens = seg_stripped.split()
+            cmd_tokens = []
+            for tok in tokens:
+                if tok in (">", ">>"):
+                    break
+                cmd_tokens.append(tok)
+            if cmd_tokens:
+                verb = cmd_tokens[0].lower()
+            else:
+                verb = "<unknown>"
             return f"Blocked potentially destructive command: {command}"
+
+    # No destructive segments found. Now check for redirects that target existing files.
+    # We'll go through each segment again to find redirects.
+    warnings = []
+    for seg in segments:
+        seg_stripped = seg.strip()
+        # We'll look for > and >> tokens, assuming they are separated by spaces.
+        tokens = seg_stripped.split()
+        # We'll iterate through tokens to find > or >> and capture the next token as file.
+        i = 0
+        while i < len(tokens):
+            if tokens[i] in (">", ">>"):
+                redirect = tokens[i]
+                if i + 1 < len(tokens):
+                    file_token = tokens[i+1]
+                    # Remove surrounding quotes if present
+                    if len(file_token) >= 2 and file_token[0] == file_token[-1] and file_token[0] in ('"', "'"):
+                        file_token = file_token[1:-1]
+                    # Check if file exists
+                    if os.path.exists(file_token):
+                        if redirect == ">":
+                            warnings.append(f"Warning: redirect '{file_token}' will truncate an existing file.")
+                        else:  # ">>"
+                            warnings.append(f"Warning: redirect '{file_token}' will append to an existing file.")
+                    # Skip the redirect and file token for further processing? We don't need to.
+                    i += 2
+                else:
+                    i += 1
+            else:
+                i += 1
+
+    # Now run the command
     try:
         result = subprocess.run(
             command, shell=True, capture_output=True, text=True, timeout=timeout,
         )
         output = (result.stdout + result.stderr).strip()
-        return output if output else "(no output)"
+        if warnings:
+            warning_str = " ".join(warnings)
+            if output:
+                output = warning_str + "\n" + output
+            else:
+                output = warning_str
+        if not output:
+            output = "(no output)"
+        return output
     except subprocess.TimeoutExpired:
         return f"Command timed out after {timeout}s: {command}"
     except Exception as exc:  # noqa: BLE001

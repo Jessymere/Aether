@@ -3,7 +3,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from config import MODELS, OLLAMA_URL
+from config import MODELS, model_route
 from ollama_client import chat
 
 
@@ -11,8 +11,20 @@ def _encode(path: Path) -> str:
     return base64.b64encode(path.read_bytes()).decode("ascii")
 
 
+def _ask(prompt: str, images: list[str], num_predict: int) -> str:
+    """Send one multimodal turn to whichever surface the vision role uses.
+
+    The role is resolved rather than pinned to Ollama: the default vision model
+    is hosted now, and a hardcoded local URL would keep calling a model that
+    was never pulled.
+    """
+    base_url, api_key, surface = model_route(MODELS["vision"])
+    return chat(base_url, MODELS["vision"], [{"role": "user", "content": prompt}],
+                images=images, num_predict=num_predict, api_key=api_key, surface=surface)
+
+
 def analyze_image(path: Path, prompt: str = "Describe this image carefully. Identify visible text, objects, layout, and important details.") -> str:
-    return chat(OLLAMA_URL, MODELS["vision"], [{"role": "user", "content": prompt}], images=[_encode(path)], num_predict=2048)
+    return _ask(prompt, [_encode(path)], 2048)
 
 
 def analyze_video(path: Path, prompt: str = "Analyze these representative video frames. Describe the sequence, visible text, objects, actions, and important changes over time.") -> str:
@@ -25,7 +37,7 @@ def analyze_video(path: Path, prompt: str = "Analyze these representative video 
         frames = sorted(Path(folder).glob("frame-*.jpg"))
         if not frames:
             raise RuntimeError("FFmpeg did not extract any video frames.")
-        return chat(OLLAMA_URL, MODELS["vision"], [{"role": "user", "content": prompt}], images=[_encode(frame) for frame in frames], num_predict=2500)
+        return _ask(prompt, [_encode(frame) for frame in frames], 2500)
 
 
 def analyze_media(path: Path, prompt: str = "") -> str:

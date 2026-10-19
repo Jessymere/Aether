@@ -1,6 +1,6 @@
 # Aether — J.A.R.V.I.S.-style local AI assistant
 
-Conversational AI assistant that chats, builds software, controls your computer, and remembers past conversations. Runs locally on Ollama. Shared core in `orchestrator.py` — both `main.py` (CLI) and `desktop_ui.py` (Tkinter → `Aether.exe`) use the same pipeline.
+Conversational AI assistant that chats, builds software, controls your computer, and remembers past conversations. Runs locally on Ollama. Shared core in `orchestrator.py` — `main.py` (CLI), `desktop_ui.py` (Tkinter → `Aether.exe`), and `web_ui.py` (browser) all drive the same `Orchestrator.run()` / `apply_proposal()` path, so approval always takes the same rollback backup, containment check, and changelog note.
 
 ## What Aether can do
 
@@ -19,6 +19,19 @@ Conversational AI assistant that chats, builds software, controls your computer,
 - Streaming output: planner/reviewer/tester tokens appear incrementally
 - Approval gate: validate in sandbox before writing files (skipped in exe mode — no Python interpreter bundled)
 
+**Trading desk (`desk` intent)**
+- "run the desk", "scan the market", "backtest SPY", "panic" — routed by `classify_intent` to `Orchestrator.run_desk()`, 0 Ollama calls for the routing itself.
+- Two venues, one pipeline: Solana memecoins (DexScreener) and US stocks/ETFs (Yahoo). Every venue declares `paper` or `live` and auto-degrades to paper without credentials.
+- Candidates must clear a **three-verdicts walk-forward backtest** (`desk_backtest.evaluate`) over years the rule never saw — train, folds, holdout, plus a train-vs-holdout degradation check. A failed verdict benches the rule and writes the reason.
+- Only the JUDGE has an opinion; it answers one narrow `buy`/`hold`/`skip` plus a confidence. Every floor, ceiling and size is enforced by code around it. Skips are ledger rows with `vetoed_by`, so the log can be graded on what it declined.
+- It reads its own record back. `closed_trades()` rebuilds finished round trips from the fills (FIFO cost basis, both legs' fees), `record_summary()` reduces them to win rate and expectancy, and those go into the judge's facts *and* into `adapt_dial()`, which shrinks size after a cold patch. No retraining — the ledger is the feedback loop, paper and live kept apart.
+- The desk also learns per rule: `closed_trades()` now carries the `rule_id` that opened each trade, and `rule_records()` groups them by rule. A rule whose own closed trades fall below `DESK_RECORD_WIN_FLOOR` with at least `DESK_RECORD_MIN_TRADES` is stood down by name, so the historical gate never even sees it.
+- Size follows volatility, not one number for every ticker. `atr_pct()` measures the name's own daily range; the stop is 2 ranges away and the target 3, and a noisier name is sized back so a stop-out costs the same dollars as on a quiet one. A stop that suits SPY stops a meme coin out on an ordinary afternoon, so the distance fits the instrument. `DESK_REFERENCE_ATR_PCT` (default 4%) is the reference range; the saved reading is re-used on restart.
+- Kill switch: `DeskRunner.panic()` halts, writes `desk/KILL` and flattens; the daily-loss, drawdown and losing-day ceilings trip it automatically.
+- Desktop: a **Desk** tab with Start / Stop / **PANIC**, a live position table and the cycle log. Live mode is red-badged.
+- Live Solana signs locally in `desk_solana.py` (Ed25519 via `pynacl`, Jupiter for the route) and needs `SOLANA_PRIVATE_KEY`; without a key the venue runs paper. It holds back `SOLANA_MIN_SOL` for fees, caps by balance and by price impact, and falls back to `None` (no trade) on any swap error.
+- The crypto venue runs on Robinhood (`DESK_CRYPTO_BROKER=robinhood`, the default here), a custodial account; `DESK_CRYPTO_BROKER=jupiter` switches back to the Solana wallet. Every Robinhood request needs an Ed25519 signature, so `ROBINHOOD_API_KEY` alone is not enough: run `python -m desk_keys`, upload the printed public half in the app, and put the private half in `.env`. Until both halves parse the venue stays on paper. Signing is verified live — but keys are permission, not balance: an unfunded account reads `buying_power: 0` and refuses every buy, so fund it before a live run.
+
 **System control (J.A.R.V.I.S. computer control)**
 - `open notepad` / `open chrome` — launch applications
 - `open file C:\path\to\file` / `open folder C:\path` — open files/folders
@@ -29,8 +42,8 @@ Conversational AI assistant that chats, builds software, controls your computer,
 
 ## Requirements
 
-- Ollama running at `http://127.0.0.1:11434` with models: `qwen3.5:4b` (planner/tester/security/release), `qwen2.5-coder:7b` (coder + reviewer), `gemma4:e4b` (vision)
-- Python on PATH. No venv/pyproject/requirements for the builder (stdlib + Ollama HTTP only).
+- Ollama at `http://127.0.0.1:11434` for any local role. The default `config.MODELS` runs every seat on a **free hosted tier** instead — NVIDIA NIM for the heavy seats, OpenRouter for the reviewer and the small helper — so no model download is needed. Set `NVIDIA_API_KEY` / `OPENROUTER_API_KEY` in `.env`; `python main.py --preflight` reports which slug resolves to which surface, and `--auto-models` falls back to an installed local model when a key is missing.
+- Python on PATH. Builder deps are stdlib + `urllib` + `psutil` (`pip install -r requirements.txt`); optional extras live in `requirements-mcp.txt` / `requirements-ui.txt`.
 - `mcp[cli]`, `npx`, and `uvx` for MCP tools. `pyinstaller` for `build_aether.ps1`.
 - Windows SAPI (built-in) for voice output — no extra install.
 
@@ -42,7 +55,8 @@ Conversational AI assistant that chats, builds software, controls your computer,
   - `--quality-rounds 0..2` — extra review/repair cycles (default 1).
   - `--project <path>` — target folder (default `workspace/`).
   - `--web` / `--auto-web` — optional web research brief.
-- `python desktop_ui.py` — Tkinter Windows UI (becomes `Aether.exe`). Chat input at bottom, message bubbles, voice toggle, three modes (Chat/Build/Q&A), Auto toggle, Open Vault, Save to Vault buttons.
+- `python desktop_ui.py` — Tkinter Windows UI (becomes `Aether.exe`). **Chat** and **Desk** tabs, message bubbles, voice toggle, Auto toggle, Open Vault, Save to Vault buttons. The Desk tab drives the same `DeskRunner` the CLI does.
+- `python web_ui.py` — browser UI on `http://127.0.0.1:8765`, same pipeline, with an Approve button that delegates to `apply_proposal()`.
 - `python self_improve.py --rounds 1` — guarded self-improvement (`.py/.md/.Modelfile` only, ZIP backup, sandbox validation, diff preview, approval required).
 - `python update.py` — check for updates.
 

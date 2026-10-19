@@ -22,7 +22,8 @@ from tkinter import filedialog, messagebox, ttk
 
 from orchestrator import Orchestrator, CancelledError
 from agents import tester
-from config import MEMORY_FILE, MODELS, RUNS, WORKSPACE, VERSION
+from config import (DESK_CYCLE_SECONDS, DESK_EXECUTION_MODE, MEMORY_FILE, MODELS,
+                    RUNS, WORKSPACE, VERSION)
 from update import check_for_updates
 from web_research import needs_web, research
 from vision import analyze_media
@@ -95,6 +96,13 @@ class BuilderApp:
         self.orchestrator = None
         self.result = None
 
+        # Desk tab state. The runner lives on a daemon thread; the UI only ever
+        # reads runner.state(), so a slow cycle can never freeze the window.
+        self.desk_runner = None
+        self._desk_stop = threading.Event()
+        self._desk_after = None
+        self._desk_active = False
+
         self._load_conversation()
         self._setup_styles()
         self._build_ui()
@@ -123,6 +131,9 @@ class BuilderApp:
         style.map("TButton", background=[("active", "#4e4e4e"), ("pressed", "#5e5e5e")])
         style.configure("Accent.TButton", background=accent, foreground="white")
         style.map("Accent.TButton", background=[("active", "#148ed6"), ("pressed", "#0d6aa8")])
+        style.configure("Danger.TButton", background="#b71c1c", foreground="white",
+                        font=("Segoe UI", 10, "bold"))
+        style.map("Danger.TButton", background=[("active", "#d32f2f"), ("pressed", "#8e0000")])
         style.configure("TRadiobutton", background=panel, foreground=fg)
         style.configure("TCheckbutton", background=panel, foreground=fg)
         style.configure("TEntry", fieldbackground="#252525", foreground=fg, bordercolor="#3e3e3e")
@@ -131,7 +142,7 @@ class BuilderApp:
         style.configure("Title.TLabel", font=("Segoe UI", 24, "bold"), foreground=accent)
         style.configure("Subtitle.TLabel", foreground="#888888", font=("Segoe UI", 10))
 
-        root.configure(bg=bg)
+        self.root.configure(bg=bg)
 
     def _build_ui(self) -> None:
         # Header
@@ -140,9 +151,15 @@ class BuilderApp:
         ttk.Label(header, text="Aether", style="Title.TLabel").pack(anchor="w")
         ttk.Label(header, text="Your local AI assistant — chat, build, automate", style="Subtitle.TLabel").pack(anchor="w", pady=(2, 0))
 
+        # One window, two tabs: chat on the left of the notebook, desk behind it
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill="both", expand=True, padx=20, pady=(8, 0))
+        chat_tab = ttk.Frame(self.notebook, style="TPanel.TFrame")
+        self.notebook.add(chat_tab, text="  Chat  ")
+
         # Chat area
-        chat_frame = ttk.Frame(self.root, style="TPanel.TFrame")
-        chat_frame.pack(fill="both", expand=True, padx=20, pady=(8, 0))
+        chat_frame = ttk.Frame(chat_tab, style="TPanel.TFrame")
+        chat_frame.pack(fill="both", expand=True)
         self.chat = ChatText(chat_frame)
         self.chat.pack(fill="both", expand=True)
 
@@ -157,7 +174,7 @@ class BuilderApp:
                 self.chat.append(f"Aether: {text}", "aether", "aether_linesep")
 
         # Input area
-        input_frame = ttk.Frame(self.root, style="TPanel.TFrame", padding=(20, 8, 20, 16))
+        input_frame = ttk.Frame(chat_tab, style="TPanel.TFrame", padding=(0, 8, 0, 0))
         input_frame.pack(fill="x")
 
         # Mode + controls row
@@ -203,6 +220,11 @@ class BuilderApp:
         self.cancel_btn = ttk.Button(btn_row, text="Cancel", command=self.cancel_run, state="disabled")
         self.cancel_btn.pack(side="left")
 
+        # Desk tab
+        desk_tab = ttk.Frame(self.notebook, style="TPanel.TFrame", padding=(0, 8, 0, 8))
+        self.notebook.add(desk_tab, text="  Desk  ")
+        self._build_desk_tab(desk_tab)
+
         # Status bar
         self.status = ttk.Label(self.root, text="● Ready", anchor="w", foreground="#00e676")
         self.status.pack(fill="x", padx=20, pady=(0, 8))
@@ -216,6 +238,241 @@ class BuilderApp:
         self.project_label.pack(side="left")
         ttk.Button(proj_frame, text="Choose Folder", command=self.choose_project).pack(side="right")
         ttk.Button(proj_frame, text="Open", command=self.open_workspace).pack(side="right", padx=(0, 8))
+
+    # ------------------------------------------------------------------ Desk
+    #
+    # The tab is a *view*. Every number it shows comes from runner.state(); it
+    # never reaches into the broker itself, so the desk keeps running at full
+    # speed even while the window is repainting.
+    def _build_desk_tab(self, parent) -> None:
+        bar = ttk.Frame(parent, style="TPanel.TFrame")
+        bar.pack(fill="x")
+
+        self.desk_start_btn = ttk.Button(bar, text="Start desk", command=self.desk_start,
+                                         style="Accent.TButton")
+        self.desk_start_btn.pack(side="left", padx=(0, 8))
+        self.desk_stop_btn = ttk.Button(bar, text="Stop", command=self.desk_stop,
+                                        state="disabled")
+        self.desk_stop_btn.pack(side="left", padx=(0, 8))
+        self.desk_panic_btn = ttk.Button(bar, text="PANIC", command=self.desk_panic,
+                                         style="Danger.TButton", state="disabled")
+        self.desk_panic_btn.pack(side="left", padx=(0, 16))
+
+        self.desk_venue_vars = {"stocks": tk.BooleanVar(value=True),
+                                "crypto": tk.BooleanVar(value=True)}
+        for venue, var in self.desk_venue_vars.items():
+            ttk.Checkbutton(bar, text=venue, variable=var,
+                            style="TCheckbutton").pack(side="left", padx=(0, 6))
+
+        self.desk_mode_label = ttk.Label(bar, text=f"MODE {DESK_EXECUTION_MODE.upper()}",
+                                         style="TPanel.TLabel", foreground="#ffab40")
+        self.desk_mode_label.pack(side="right")
+
+        self.desk_summary = ttk.Label(parent, text="Desk idle.", style="TPanel.TLabel",
+                                      foreground="#78909c")
+        self.desk_summary.pack(fill="x", pady=(8, 6))
+
+        # Anything that makes the desk look healthier than it is. Normally
+        # empty, and packed away when it is.
+        self.desk_health = ttk.Label(parent, text="", style="TPanel.TLabel",
+                                     foreground="#ffab40", wraplength=760,
+                                     justify="left")
+
+        table = ttk.Frame(parent, style="TPanel.TFrame")
+        table.pack(fill="x")
+        columns = ("symbol", "qty", "entry", "mark", "pnl", "stop", "take",
+                   "venue", "mode")
+        self.desk_tree = ttk.Treeview(table, columns=columns, show="headings", height=6)
+        for column in columns:
+            self.desk_tree.heading(column, text=column.title())
+            self.desk_tree.column(column, width=76, anchor="w")
+        self.desk_tree.column("symbol", width=130)
+        self.desk_tree.tag_configure("up", foreground="#4caf50")
+        self.desk_tree.tag_configure("down", foreground="#ff5252")
+        self.desk_tree.pack(fill="x")
+
+        self.desk_decisions = ttk.Treeview(
+            parent, columns=("symbol", "action", "conf", "vetoed", "why"),
+            show="headings", height=5)
+        for column, width in (("symbol", 130), ("action", 70), ("conf", 55),
+                              ("vetoed", 90), ("why", 0)):
+            self.desk_decisions.heading(column, text=column.title())
+            self.desk_decisions.column(column, width=width, anchor="w")
+        self.desk_decisions.tag_configure("buy", foreground="#4caf50")
+        self.desk_decisions.tag_configure("skip", foreground="#78909c")
+        self.desk_decisions.pack(fill="x", pady=(6, 0))
+
+        self.desk_log = ChatText(parent, height=10)
+        self.desk_log.pack(fill="both", expand=True, pady=(8, 0))
+        self.desk_log.append("Desk ready. Start runs one cycle; Stop ends after this "
+                             "cycle; PANIC halts and flattens everything.", "meta")
+
+    def desk_start(self) -> None:
+        venues = [v for v, var in self.desk_venue_vars.items() if var.get()]
+        if not venues:
+            messagebox.showinfo("Desk", "Pick at least one venue.")
+            return
+
+        if self.desk_runner is not None:
+            # Restart an existing desk after a stop or a panic: clear the halt
+            # and the kill file rather than building a second runner.
+            self.desk_runner.resume()
+        else:
+            try:
+                from desk_brain import make_brain
+                from desk_runner import DeskRunner
+            except Exception as exc:  # noqa: BLE001
+                messagebox.showerror("Desk", f"The desk will not load: {exc}")
+                return
+            self.desk_runner = DeskRunner(
+                venues=venues,
+                brain=make_brain(),
+                status_cb=lambda line: self.root.after(0, self._desk_status, line),
+                log_cb=lambda line, level="info": self.root.after(0, self._desk_append, line, level),
+                cancel_cb=self._desk_stop.is_set,
+            )
+
+        self._desk_stop.clear()
+        self._desk_active = True
+        self.desk_start_btn.configure(state="disabled")
+        self.desk_stop_btn.configure(state="normal")
+        self.desk_panic_btn.configure(state="normal")
+        self._desk_append(f"Desk started on {', '.join(venues)} — cycling every "
+                          f"{DESK_CYCLE_SECONDS}s.", "system")
+        threading.Thread(target=self._desk_loop, daemon=True).start()
+        if self._desk_after is not None:
+            self.root.after_cancel(self._desk_after)
+        self._desk_tick()
+
+    def _desk_loop(self) -> None:
+        """Run cycles until Stop. One cycle per pass so Stop is prompt."""
+        runner = self.desk_runner
+        try:
+            while runner is not None and not self._desk_stop.is_set():
+                result = runner.run(cycles=1)
+                if result.kill_switch or self._desk_stop.is_set():
+                    break
+                self._desk_stop.wait(max(5, DESK_CYCLE_SECONDS))
+        except Exception as exc:  # noqa: BLE001
+            self.root.after(0, self._desk_append, f"desk error: {exc}", "error")
+        finally:
+            self.root.after(0, self._desk_finished)
+
+    def _desk_finished(self) -> None:
+        self._desk_active = False
+        self.desk_start_btn.configure(state="normal")
+        self.desk_stop_btn.configure(state="disabled")
+        self.desk_panic_btn.configure(state="disabled")
+        halted = bool(self.desk_runner and self.desk_runner.state().get("halted"))
+        self._desk_append("Desk halted — PANIC tripped or the kill file is present."
+                          if halted else "Desk stopped.", "system")
+
+    def desk_stop(self) -> None:
+        self._desk_stop.set()
+        self._desk_append("Stop requested — finishing this cycle.", "system")
+        self.desk_stop_btn.configure(state="disabled")
+
+    def desk_panic(self) -> None:
+        if self.desk_runner is None:
+            return
+        self._desk_stop.set()
+        self._desk_append("PANIC — halting and flattening.", "error")
+        threading.Thread(target=self._desk_panic_worker, daemon=True).start()
+
+    def _desk_panic_worker(self) -> None:
+        runner = self.desk_runner
+        try:
+            runner.panic(flatten=True, reason="manual panic")
+        except Exception as exc:  # noqa: BLE001
+            self.root.after(0, self._desk_append, f"panic error: {exc}", "error")
+
+    def _desk_status(self, line: str) -> None:
+        self.status.configure(text=f"● {line}", foreground="#007acc")
+
+    def _desk_append(self, line: str, level: str = "info") -> None:
+        tag = {"trade": "aether", "warn": "system", "error": "error"}.get(level, "meta")
+        self.desk_log.append(line, tag)
+
+    def _desk_tick(self) -> None:
+        """Poll the snapshot. Never touches the network, so it cannot stall."""
+        runner = self.desk_runner
+        if runner is None:
+            return
+        try:
+            snapshot = runner.state()
+        except Exception:  # noqa: BLE001
+            snapshot = {}
+        self._desk_render(snapshot)
+        self._desk_after = self.root.after(800, self._desk_tick)
+
+    def _desk_render(self, snapshot: dict) -> None:
+        modes = sorted({p.get("mode", "") for p in snapshot.get("positions", [])})
+        label = snapshot.get("mode", DESK_EXECUTION_MODE)
+        if modes:
+            label += " / " + ", ".join(m for m in modes if m)
+        self.desk_mode_label.configure(
+            text=f"MODE {label.upper()}",
+            foreground="#ff5252" if "live" in label else "#ffab40")
+
+        if snapshot.get("halted"):
+            heading = "HALTED"
+        elif self._desk_active:
+            heading = "running"
+        else:
+            heading = "idle"
+        equity = snapshot.get("equity")
+        parts = [f"{heading}"]
+        if equity is not None:
+            parts.append(f"equity {equity:,.2f}")
+        pnl = snapshot.get("pnl")
+        if pnl is not None:
+            parts.append(f"P&L {pnl:+,.2f}")
+        parts.append(f"dial {snapshot.get('dial', 0.0):.2f}")
+        parts.append(f"filled {snapshot.get('filled', 0)}")
+        parts.append(f"skipped {snapshot.get('skips', 0)}")
+        record = snapshot.get("record") or {}
+        closed = sum(r.get("closed_trades", 0) for r in record.values())
+        if closed:
+            wins = sum(r.get("win_rate") or 0.0 for r in record.values())
+            parts.append(f"record {wins / len(record):.0%} win / {closed} closed")
+        self.desk_summary.configure(text=" · ".join(parts))
+
+        health = snapshot.get("health") or []
+        if health:
+            self.desk_health.configure(text="⚠ " + " · ".join(health))
+            if not self.desk_health.winfo_ismapped():
+                self.desk_health.pack(fill="x", before=self.desk_summary,
+                                      pady=(0, 6))
+        elif self.desk_health.winfo_ismapped():
+            self.desk_health.pack_forget()
+
+        seen = set()
+        for position in snapshot.get("positions", []):
+            symbol = position.get("symbol", "")
+            seen.add(symbol)
+            pnl = position.get("pnl")
+            pct = position.get("pnl_pct")
+            values = (symbol, f"{position.get('qty') or 0:g}",
+                      f"{position.get('avg_price') or 0:g}",
+                      f"{position.get('mark') or 0:g}" if position.get("mark") else "—",
+                      f"{pnl:+,.2f} ({pct:+.1f}%)" if pnl is not None else "—",
+                      f"{position.get('stop') or 0:g}",
+                      f"{position.get('take') or 0:g}",
+                      position.get("venue", ""), position.get("mode", ""))
+            tags = ("up",) if (pnl or 0) > 0 else ("down",) if (pnl or 0) < 0 else ()
+            if self.desk_tree.exists(symbol):
+                self.desk_tree.item(symbol, values=values, tags=tags)
+            else:
+                self.desk_tree.insert("", "end", iid=symbol, values=values, tags=tags)
+        for symbol in set(self.desk_tree.get_children()) - seen:
+            self.desk_tree.delete(symbol)
+
+        self.desk_decisions.delete(*self.desk_decisions.get_children())
+        for note in (snapshot.get("recent") or [])[:15]:
+            self.desk_decisions.insert("", "end", values=(
+                note.get("symbol", ""), note.get("action", ""),
+                f"{note.get('confidence', 0):.2f}", note.get("vetoed_by", ""),
+                note.get("reason", "")), tags=(note.get("action", "skip"),))
 
     # ------------------------------------------------------------------ Conversation memory
     def _load_conversation(self) -> None:

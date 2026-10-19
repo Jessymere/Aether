@@ -1,0 +1,14 @@
+# The desk is stdlib-only in paper mode: urllib for both data sources, sqlite3
+# for the ledger, threading for the runner. Nothing here is needed to run
+# `paper`, the backtest gate, or the desktop Desk tab.
+
+# --- live Solana ------------------------------------------------------------
+# The only hard extra: an Ed25519 signature is what a swap actually needs.
+# Base58 is 20 lines of pure Python and lives in desk_solana.py, so `base58`
+# and `solders` stay optional.
+pynacl
+
+# --- live stocks ------------------------------------------------------------
+# Alpaca is driven over plain urllib; install the SDK only if you convert the
+# broker to it.
+# alpaca-py

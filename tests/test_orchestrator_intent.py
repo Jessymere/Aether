@@ -103,11 +103,19 @@ class TestFastModels:
     """Tests for fast model switching."""
 
     def test_fast_models_are_faster(self) -> None:
-        """Fast models should all be qwen3.5:4b."""
-        from config import FAST_MODELS
+        """Every seat moves to a different, lighter model under --fast."""
+        from config import FAST_MODELS, MODELS
 
         for role, model in FAST_MODELS.items():
-            assert model == "qwen3.5:4b", f"Expected {role} to use qwen3.5:4b in fast mode, got {model}"
+            assert model != MODELS[role], f"{role} does not actually switch in fast mode"
+
+    def test_every_configured_model_has_a_provider(self) -> None:
+        """Nothing may be a cloud slug that routing would quietly send to Ollama."""
+        from config import FAST_MODELS, MODELS, model_route
+
+        for role, model in {**MODELS, **FAST_MODELS}.items():
+            _, _, surface = model_route(model)
+            assert surface != "local", f"{role} -> {model} is unrouted"
 
     def test_all_roles_have_fast_models(self) -> None:
         """All MODELS roles should have a corresponding FAST_MODELS entry."""

@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import re
 import difflib
+import traceback
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -46,10 +47,27 @@ from system import handle_system_request
 from vault import read_vault, write_file, append_file
 
 
+#: Words that mean "this is about the trading desk". Deliberately narrow —
+#: a bare "scan" would collide with scanning code, so it is not included.
+_DESK_WORDS = re.compile(
+    r"\b(desk|backtest|back-test|back test|trading|trade|memecoins?|"
+    r"kill switch|equity curve|portfolio|position size|daily dial|paper trad\w*|"
+    r"panic button|stock market|crypto market|dexscreener|gmgn)\b"
+)
+
+
+def _cycles_from(request: str) -> int:
+    """``"run 3 cycles"`` -> 3. Falls back to a single cycle."""
+    match = re.search(r"\b(\d{1,2})\s*cycles?\b", request.lower())
+    if not match:
+        return 1
+    return max(1, min(20, int(match.group(1))))
+
+
 @dataclass
 class OrchestrationResult:
     request: str
-    mode: str = "chat"  # "chat" | "build" | "system" | "question"
+    mode: str = "chat"  # "chat" | "build" | "system" | "question" | "desk"
     plan: Optional[str] = None
     proposal: Optional[dict] = None
     review: Optional[str] = None
@@ -60,7 +78,11 @@ class OrchestrationResult:
     approved: bool = False
     files_written: list[str] = field(default_factory=list)
     error: Optional[str] = None
+    traceback: Optional[str] = None
     run_path: Optional[Path] = None
+    #: Trading desk cycle report. Set when mode == "desk"; ``error`` carries
+    #: the same text so a front end that only knows ``error`` still shows it.
+    desk_report: Optional[str] = None
 
 
 class CancelledError(RuntimeError):
@@ -112,7 +134,8 @@ class Orchestrator:
     # ------------------------------------------------------------------
     # Streaming agents (planner / reviewer / tester)
     # ------------------------------------------------------------------
-    def _stream_planner(self, request: str, context: str, research: str = "") -> str:
+    def _stream_planner(self, request: str, context: str, research: str = "",
+                        bus=None, agent_name: Optional[str] = None) -> str:
         system = (
             "You are a pragmatic software architect. Make a short, concrete implementation plan. "
             "Produce an actionable numbered plan, files to change, and acceptance criteria. "
@@ -124,13 +147,14 @@ class Orchestrator:
             "Return numbered steps, files to create/change, and acceptance criteria."
         )
         full = ""
-        for chunk in stream_ask("planner", system, prompt):
+        for chunk in stream_ask("planner", system, prompt, bus=bus, agent_name=agent_name):
             full += chunk
             if self.stream_cb:
                 self.stream_cb(chunk)
         return full
 
-    def _stream_reviewer(self, request: str, plan: str, proposal: str) -> str:
+    def _stream_reviewer(self, request: str, plan: str, proposal: str,
+                         bus=None, agent_name: Optional[str] = None) -> str:
         system = (
             "You are a practical code reviewer. Approve when the requested behavior is implemented, "
             "the files are safe, and the included tests pass. Request revision only for real correctness, "
@@ -142,13 +166,14 @@ class Orchestrator:
             "End with either APPROVE or REVISE and explain why."
         )
         full = ""
-        for chunk in stream_ask("reviewer", system, prompt):
+        for chunk in stream_ask("reviewer", system, prompt, bus=bus, agent_name=agent_name):
             full += chunk
             if self.stream_cb:
                 self.stream_cb(chunk)
         return full
 
-    def _stream_tester(self, request: str, proposal: str, validation: str) -> str:
+    def _stream_tester(self, request: str, proposal: str, validation: str,
+                       bus=None, agent_name: Optional[str] = None) -> str:
         system = (
             "You are the testing agent in Aether. Analyze the automated validation result and proposed files. "
             "Focus only on reproducible failures, missing required tests, and concrete fixes. Be concise."
@@ -157,7 +182,7 @@ class Orchestrator:
             f"Request:\n{request}\n\nProposal:\n{proposal}\n\nAutomated validation:\n{validation}"
         )
         full = ""
-        for chunk in stream_ask("tester", system, prompt):
+        for chunk in stream_ask("tester", system, prompt, bus=bus, agent_name=agent_name):
             full += chunk
             if self.stream_cb:
                 self.stream_cb(chunk)
@@ -169,10 +194,18 @@ class Orchestrator:
     def classify_intent(self, request: str) -> str:
         """Use the planner model to classify user intent.
 
-        Returns one of: "chat", "build", "system", "question".
+        Returns one of: "chat", "build", "system", "question", "desk".
         This replaces brittle keyword matching with actual understanding.
+
+        The desk check is the one genuine keyword gate, and it runs *first*,
+        before the greeting shortcut: "hey, backtest SPY" is a desk request,
+        and a bare "hey" can never match a desk word.
         """
         lowered = request.strip().lower()
+
+        # Trading desk — before greetings so "hey, run the desk" still works.
+        if _DESK_WORDS.search(lowered):
+            return "desk"
 
         # Very short greetings — instant reply, no AI call needed.
         if len(lowered) < 40 and any(kw in lowered for kw in (
@@ -194,14 +227,16 @@ class Orchestrator:
             "  files, apps, or software projects\n"
             "- system: asking to open apps/files/folders, run commands, check "
             "  system info, list folders, or control the computer\n"
+            "- desk: the trading desk — markets, candidates, backtests, "
+            "  positions, equity, the kill switch\n"
             "\n"
-            "Reply with ONLY the category name (chat, build, system, or question). "
-            "No other text."
+            "Reply with ONLY the category name (chat, build, system, question, "
+            "or desk). No other text."
         )
         prompt = f"User request:\n{request}"
         try:
             answer = ask("planner", system, prompt).strip().lower()
-            for valid in ("chat", "build", "system", "question"):
+            for valid in ("desk", "chat", "build", "system", "question"):
                 if valid in answer:
                     return valid
         except Exception:  # noqa: BLE001
@@ -239,9 +274,34 @@ class Orchestrator:
         response = ask("planner", system, request)
         return response if response.strip() else "I'm here. What would you like to work on?"
 
+    # ------------------------------------------------------------------
+    # Trading desk
+    # ------------------------------------------------------------------
+    def run_desk(self, cycles: int = 1, venues: Optional[list[str]] = None,
+                 mode: Optional[str] = None, scan_limit: int = 8) -> str:
+        """Run N desk cycles and return the human-readable report.
+
+        The desk sits deliberately *outside* the build pipeline: it writes to
+        its own SQLite ledger, never to the project folder, so it cannot trip
+        the proposal/approval machinery or the sandbox validator.
+        """
+        from desk_brain import make_brain
+        from desk_runner import DeskRunner
+
+        self._status("Desk: warming up")
+        self._log("Trading desk engaged")
+        runner = DeskRunner(
+            venues=venues, mode=mode, brain=make_brain(),
+            status_cb=self.status_cb, log_cb=self.log_cb,
+            cancel_cb=self.cancel_cb, scan_limit=scan_limit,
+        )
+        self._check_cancelled()
+        result = runner.run(cycles=cycles)
+        self._log(f"Desk finished: {result.filled} fill(s), {result.skips} skip(s)")
+        return result.report
+
     def run_qa(self, question: str) -> str:
         """Answer a general question directly with the planner model. No pipeline."""
-        self._log("Answering question directly")
         vault = read_vault()
         system = (
             "You are Aether, a helpful local AI assistant. Answer concisely and "
@@ -255,6 +315,10 @@ class Orchestrator:
     # ------------------------------------------------------------------
     def run(self, request: str) -> OrchestrationResult:
         result = OrchestrationResult(request=request)
+
+        # Mark the bus so the saved run record holds only this run's
+        # agent-to-agent conversation, not everything the process has seen.
+        self._bus_marker = len(bus)
 
         # AI-driven intent classification (replaces brittle keyword matching).
         intent = self.classify_intent(request)
@@ -285,6 +349,20 @@ class Orchestrator:
                 return result
             # If system handler didn't match, fall through to build
 
+        # Trading desk: its own ledger and loop, outside the build pipeline.
+        if intent == "desk":
+            result.mode = "desk"
+            try:
+                report = self.run_desk(cycles=_cycles_from(request))
+                result.desk_report = report
+                result.error = report  # so front ends that only read .error work
+            except CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                result.error = f"Desk failed: {exc}"
+                result.traceback = traceback.format_exc()
+            return result
+
         # Build pipeline
         result.mode = "build"
         self.project.mkdir(parents=True, exist_ok=True)
@@ -306,7 +384,7 @@ class Orchestrator:
             self._status("Planning...")
             self._log("Planner is creating an implementation plan")
             if self.stream_cb:
-                plan = self._stream_planner(request, context, web_brief)
+                plan = self._stream_planner(request, context, web_brief, bus=bus, agent_name="planner")
             else:
                 plan = planner(request, context, web_brief, bus=bus, agent_name="planner")
             result.plan = plan
@@ -322,6 +400,8 @@ class Orchestrator:
                             request,
                             context + "\n\nUser answers to clarification:\n" + answers,
                             web_brief,
+                            bus=bus,
+                            agent_name="planner",
                         )
                     else:
                         plan = planner(
@@ -339,7 +419,7 @@ class Orchestrator:
             raw = coder(request, plan, context, bus=bus, agent_name="coder")
             proposal = parse_proposal(raw)
             result.proposal = proposal
-            bus.send("coder", "reviewer", f"Coder proposed {len(proposal.get('files', []))} file(s): {proposal.get('summary', '')[:200]}")
+            bus.send("coder", "reviewer", f"Coder proposed {len(proposal.get('files', []))} file(s): {(proposal.get('summary') or '')[:200]}")
 
             # Quality revision loop
             self._status("Reviewing...")
@@ -364,7 +444,7 @@ class Orchestrator:
                 raw = revise(request, plan, json.dumps(proposal), review, bus=bus, agent_name="coder")
                 proposal = parse_proposal(raw)
                 result.proposal = proposal
-                bus.send("coder", "reviewer", f"Coder revised proposal: {proposal.get('summary', '')[:200]}")
+                bus.send("coder", "reviewer", f"Coder revised proposal: {(proposal.get('summary') or '')[:200]}")
                 if self.stream_cb:
                     review = self._stream_reviewer(request, plan, raw, bus=bus, agent_name="reviewer")
                 else:
@@ -391,7 +471,7 @@ class Orchestrator:
                 raw = revise(request, plan, json.dumps(proposal), review, bus=bus, agent_name="coder")
                 proposal = parse_proposal(raw)
                 result.proposal = proposal
-                bus.send("coder", "reviewer", f"Coder revised after decider: {proposal.get('summary', '')[:200]}")
+                bus.send("coder", "reviewer", f"Coder revised after decider: {(proposal.get('summary') or '')[:200]}")
                 if self.stream_cb:
                     review = self._stream_reviewer(request, plan, raw, bus=bus, agent_name="reviewer")
                 else:
@@ -435,8 +515,12 @@ class Orchestrator:
             self._log("Run cancelled by user")
         except Exception as exc:  # noqa: BLE001
             result.error = str(exc)
+            result.traceback = traceback.format_exc()
             self._status("Error")
             self._log(f"Task stopped with an error: {exc}")
+            # The pipeline folds exceptions into result.error, so a bug in one
+            # line reads like a failed agent run. Print and keep the stack.
+            traceback.print_exc()
 
         return result
 
@@ -513,6 +597,8 @@ class Orchestrator:
             "tester_report": tester_report,
             "approved": approved,
             "files_written": result.files_written,
+            "release": result.release,
+            "agent_conversation": bus.transcript(since=getattr(self, "_bus_marker", 0)),
         }
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         run_path = RUNS / f"{stamp}.json"

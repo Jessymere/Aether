@@ -2,10 +2,10 @@ import json
 import re
 from pathlib import Path
 
-from config import MAX_CONTEXT_CHARS, MAX_RAW_CONTEXT_CHARS, MEMORY_DB, MEMORY_FILE, MODELS, OLLAMA_URL, EXPLABS_URL, EXPLABS_API_KEY, EXPLABS_MODELS
+from config import MAX_CONTEXT_CHARS, MAX_RAW_CONTEXT_CHARS, MEMORY_DB, MEMORY_FILE, MODELS, OLLAMA_URL, EXPLABS_URL, EXPLABS_API_KEY, EXPLABS_MODELS, model_route
 from memory_store import recent_context
 from ollama_client import chat, stream_chat
-from message_bus import bus, ask_with_context, MessageBus
+from message_bus import bus, MessageBus
 from rea_client import (
     rea_analyze_apk,
     rea_analyze_binary,
@@ -24,14 +24,14 @@ def use_fast_models() -> None:
     MODELS.update(FAST_MODELS)
 
 
-def _ollama_config_for_model(model: str) -> tuple[str, str | None]:
-    """Return (base_url, api_key) for a given model name.
-    Routes Experiential-registered models through the gateway; others use local Ollama.
+def _ollama_config_for_model(model: str) -> tuple[str, str | None, str]:
+    """Return (base_url, api_key, surface) for a given model name.
+
+    Gateway models go to Experiential; everything else stays on local Ollama.
+    ``surface`` is passed through to the client so it picks the matching wire
+    format instead of inferring it from whether a key is set.
     """
-    for _role, slug in EXPLABS_MODELS.items():
-        if model == slug:
-            return EXPLABS_URL, EXPLABS_API_KEY
-    return OLLAMA_URL, None
+    return model_route(model)
 
 
 def ask(role: str, system: str, prompt: str,
@@ -41,11 +41,11 @@ def ask(role: str, system: str, prompt: str,
     if bus is not None and agent_name is not None:
         return ask_with_context_bus(role, system, prompt, bus, agent_name,
                                     include_history=include_history)
-    base_url, api_key = _ollama_config_for_model(MODELS[role])
+    base_url, api_key, surface = _ollama_config_for_model(MODELS[role])
     return chat(base_url, MODELS[role], [
         {"role": "system", "content": system},
         {"role": "user", "content": prompt},
-    ], num_predict=output_limit, api_key=api_key)
+    ], num_predict=output_limit, api_key=api_key, surface=surface)
 
 
 def ask_json(role: str, system: str, prompt: str,
@@ -55,23 +55,50 @@ def ask_json(role: str, system: str, prompt: str,
     if bus is not None and agent_name is not None:
         return ask_with_context_bus(role, system, prompt, bus, agent_name,
                                     include_history=include_history)
-    base_url, api_key = _ollama_config_for_model(MODELS[role])
+    base_url, api_key, surface = _ollama_config_for_model(MODELS[role])
     return chat(base_url, MODELS[role], [
         {"role": "system", "content": system},
         {"role": "user", "content": prompt},
-    ], json_mode=True, num_predict=output_limit, api_key=api_key)
+    ], json_mode=True, num_predict=output_limit, api_key=api_key, surface=surface)
+
+
+def _bus_prompt(prompt: str, bus: MessageBus, agent_name: str,
+                include_history: int = 5) -> str:
+    """Prepend recent message-bus traffic to a prompt.
+
+    Shared by the blocking (ask_with_context_bus) and streaming (stream_ask)
+    paths so the two prompts cannot drift apart.
+    """
+    recent = bus.conversation(participant=agent_name)[-include_history:]
+    context_lines = [
+        f"[{msg.sender} → {msg.recipient}] {msg.content}" for msg in recent
+    ]
+    context_str = "\n".join(context_lines) if context_lines else "(no prior messages)"
+    return (
+        f"{prompt}\n\n"
+        f"--- Recent agent messages (most recent last) ---\n"
+        f"{context_str}\n"
+        f"--- End of agent messages ---\n"
+    )
 
 
 def stream_ask(role: str, system: str, prompt: str,
                bus: MessageBus | None = None, agent_name: str | None = None,
                include_history: int = 5):
-    """Yield content chunks from a streaming chat response."""
+    """Yield content chunks from a streaming chat response.
+
+    Accepts bus/agent_name just like ask() does, so a streamed run sees the
+    same agent-to-agent context a blocking run gets. Without this the two
+    paths silently diverge.
+    """
+    if bus is not None and agent_name is not None:
+        prompt = _bus_prompt(prompt, bus, agent_name, include_history)
     output_limit = 1024 if role in {"planner", "reviewer"} else 2048
-    base_url, api_key = _ollama_config_for_model(MODELS[role])
+    base_url, api_key, surface = _ollama_config_for_model(MODELS[role])
     for chunk in stream_chat(base_url, MODELS[role], [
         {"role": "system", "content": system},
         {"role": "user", "content": prompt},
-    ], num_predict=output_limit, api_key=api_key):
+    ], num_predict=output_limit, api_key=api_key, surface=surface):
         yield chunk
 
 
@@ -94,32 +121,15 @@ def ask_with_context_bus(role: str, system: str, prompt: str,
     from config import MAX_CONTEXT_CHARS, MAX_RAW_CONTEXT_CHARS
     from ollama_client import chat
 
-    base_url, api_key = OLLAMA_URL, None
     model = MODELS.get(role, "qwen3.5:4b")
-    for _role, slug in EXPLABS_MODELS.items():
-        if model == slug:
-            base_url, api_key = EXPLABS_URL, EXPLABS_API_KEY
-            break
+    base_url, api_key, surface = model_route(model)
 
-    recent = bus.conversation(participant=agent_name)[-include_history:]
-    context_lines = []
-    for msg in recent:
-        context_lines.append(
-            f"[{msg.sender} → {msg.recipient}] {msg.content}"
-        )
-    context_str = "\n".join(context_lines) if context_lines else "(no prior messages)"
-
-    full_prompt = (
-        f"{prompt}\n\n"
-        f"--- Recent agent messages (most recent last) ---\n"
-        f"{context_str}\n"
-        f"--- End of agent messages ---\n"
-    )
+    full_prompt = _bus_prompt(prompt, bus, agent_name, include_history)
 
     return chat(base_url, model, [
         {"role": "system", "content": system},
         {"role": "user", "content": full_prompt},
-    ], num_predict=2048, api_key=api_key)
+    ], num_predict=2048, api_key=api_key, surface=surface)
 
 
 def planner(request: str, context: str, research: str = "",
@@ -185,12 +195,27 @@ def parse_proposal(raw: str) -> dict:
     if start < 0 or end <= start:
         raise ValueError("Coder did not return a JSON proposal.")
     proposal = json.loads(cleaned[start:end + 1])
+    if not isinstance(proposal, dict):
+        raise ValueError("Proposal JSON is not an object.")
     if not isinstance(proposal.get("files"), list):
         raise ValueError("Proposal is missing a files list.")
+    # Models emit null/odd shapes often enough that everything downstream
+    # (slicing summary, indexing item["path"], writing content) must be able
+    # to assume a normalised shape rather than crash on None.
+    proposal["summary"] = proposal.get("summary") or ""
+    files = []
     for item in proposal["files"]:
-        path = Path(item["path"])
+        if not isinstance(item, dict):
+            raise ValueError(f"Proposal file entry is not an object: {item!r}")
+        path_str = item.get("path")
+        if not isinstance(path_str, str) or not path_str:
+            raise ValueError(f"Proposal file entry has no usable path: {item!r}")
+        path = Path(path_str)
         if path.is_absolute() or ".." in path.parts:
-            raise ValueError(f"Unsafe proposed path: {item['path']}")
+            raise ValueError(f"Unsafe proposed path: {path_str}")
+        item["content"] = item.get("content") or ""
+        files.append(item)
+    proposal["files"] = files
     return proposal
 
 
