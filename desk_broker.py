@@ -30,6 +30,7 @@ from typing import Any, Optional, Protocol
 
 from config import (
     ALPACA_BASE_URL,
+    ALPACA_PAPER_URL,
     ALPACA_KEY_ID,
     ALPACA_SECRET_KEY,
     DESK_CRYPTO_BROKER,
@@ -208,6 +209,8 @@ class AlpacaBroker:
     key_id: str = ALPACA_KEY_ID
     secret: str = ALPACA_SECRET_KEY
     timeout: int = 20
+    poll_seconds: int = 20
+    last_error: str = ""
 
     @property
     def configured(self) -> bool:
@@ -269,13 +272,35 @@ class AlpacaBroker:
         }
         try:
             ack = self._call("/v2/orders", method="POST", body=payload)
-        except BrokerError:
+        except BrokerError as exc:
+            self.last_error = str(exc)
             return None
+        # An accepted market order is not a fill: wait for Alpaca's own price
+        # and quantity, and cancel rather than record one that never happened.
+        order_id = str(ack.get("id") or "")
+        deadline = time.monotonic() + self.poll_seconds
+        while ack.get("status") not in ("filled", "canceled", "expired", "rejected") \
+                and time.monotonic() < deadline and order_id:
+            time.sleep(1)
+            try:
+                ack = self._call(f"/v2/orders/{order_id}")
+            except BrokerError:
+                continue
+        filled_qty = _float(ack.get("filled_qty"))
+        if ack.get("status") != "filled":
+            if order_id and ack.get("status") not in ("canceled", "expired", "rejected"):
+                try:
+                    self._call(f"/v2/orders/{order_id}", method="DELETE")
+                except BrokerError:
+                    pass
+            self.last_error = (f"Alpaca order {ack.get('status') or 'unknown'} after "
+                               f"{self.poll_seconds}s (is the market open?)")
+            if filled_qty <= 0:
+                return None
         return Fill(
-            symbol=order.symbol, side=order.side, qty=float(qty),
-            price=float(ack.get("filled_avg_price") or order.price or 0.0),
-            venue="stocks", broker=self.name, mode=self.mode,
-            order_id=str(ack.get("id") or ""),
+            symbol=order.symbol, side=order.side, qty=filled_qty or float(qty),
+            price=_float(ack.get("filled_avg_price")) or order.price,
+            venue="stocks", broker=self.name, mode=self.mode, order_id=order_id,
         )
 
 
@@ -771,8 +796,13 @@ def make_broker(venue: str, mode: str = "paper", *, starting_cash: float = 10_00
     fees, slippage = desk_costs(venue)
     paper = lambda: PaperBroker(starting_cash=starting_cash,
                                 fees_bps=fees, slippage_bps=slippage)
-    if venue == "stocks" and mode == "live":
-        broker = AlpacaBroker(mode="live")
+    if venue == "stocks" and mode in ("live", "broker-paper"):
+        broker = AlpacaBroker()
+        if mode == "broker-paper":
+            broker.base_url = ALPACA_PAPER_URL
+        # The label follows the host, never the request: an order on Alpaca's
+        # paper host is fake money and must not be recorded as live.
+        broker.mode = "broker-paper" if broker.base_url == ALPACA_PAPER_URL else "live"
         if broker.configured:
             return broker
         return paper()

@@ -22,7 +22,7 @@ def main() -> None:
     parser.add_argument("--desk", action="store_true", help="Run the trading desk directly instead of classifying intent")
     parser.add_argument("--cycles", type=int, default=1, help="Desk cycles to run (with --desk)")
     parser.add_argument("--venue", action="append", choices=["stocks", "crypto"], help="Desk venue(s); repeatable (with --desk)")
-    parser.add_argument("--desk-mode", choices=["paper", "shadow", "live"], default=None, help="paper, shadow (real Robinhood reads, simulated orders) or live (with --desk)")
+    parser.add_argument("--desk-mode", choices=["paper", "shadow", "broker-paper", "live"], default=None, help="paper; shadow (real Robinhood reads, simulated orders); broker-paper (Alpaca paper account); live (with --desk)")
     parser.add_argument("--desk-limit", type=int, default=12, help="Max candidates per venue (with --desk)")
     args = parser.parse_args()
 

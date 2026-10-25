@@ -337,9 +337,12 @@ DESK_VALIDATE_FRACTION = _env_float("DESK_VALIDATE_FRACTION", 0.20)
 ALPACA_KEY_ID = _env_str("ALPACA_KEY_ID", "")
 ALPACA_SECRET_KEY = _env_str("ALPACA_SECRET_KEY", "")
 ALPACA_PAPER = _env_str("ALPACA_PAPER", "1").strip().lower() not in {"0", "false", "no"}
+#: Alpaca's paper host: real broker API, fake money. Fills there are recorded as
+#: mode "broker-paper", never "live".
+ALPACA_PAPER_URL = "https://paper-api.alpaca.markets"
 _ALPACA_URL = _env_str("ALPACA_BASE_URL", "")
 ALPACA_BASE_URL = _ALPACA_URL or (
-    "https://paper-api.alpaca.markets" if ALPACA_PAPER else "https://api.alpaca.markets"
+    ALPACA_PAPER_URL if ALPACA_PAPER else "https://api.alpaca.markets"
 )
 
 SOLANA_RPC_URL = _env_str("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com")
