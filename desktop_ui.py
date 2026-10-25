@@ -230,8 +230,10 @@ class BuilderApp:
         self.notebook._segmented_button.configure(font=("Segoe UI", 13, "bold"), height=34)
         chat_tab = self.notebook.add("  Chat  ")
         desk_tab = self.notebook.add("  Desk  ")
+        research_tab = self.notebook.add("  Research  ")
         self._build_chat_tab(chat_tab)
         self._build_desk_tab(desk_tab)
+        self._build_research_tab(research_tab)
 
 
     def _build_chat_tab(self, tab) -> None:
@@ -316,6 +318,160 @@ class BuilderApp:
             self.approval_bar.pack(fill="x", padx=6, pady=(0, 8), before=self._controls)
         elif not show and self.approval_bar.winfo_manager():
             self.approval_bar.pack_forget()
+
+    # ------------------------------------------------------------------ Research
+    #
+    # Shows desk/research/*.json, written by desk_forward, desk_replay and
+    # desk_rotation. The buttons re-run them off-thread; the tab never fetches.
+    def _build_research_tab(self, parent) -> None:
+        bar = ctk.CTkFrame(parent, fg_color="transparent")
+        bar.pack(fill="x", padx=4, pady=(4, 8))
+        Label(bar, text="Does anything beat simply holding the market, on data nothing was tuned on?",
+              text_color="#cbd5e1", font=("Segoe UI", 13, "bold")).pack(side="left")
+        self.research_status = Label(bar, text="", text_color=MUTED, font=("Segoe UI", 11))
+        self.research_status.pack(side="right", padx=(8, 0))
+        self.research_btn = ctk.CTkButton(bar, text="⟳  Re-run research", width=150, height=34,
+                                          fg_color=ACCENT, hover_color="#38bdf8",
+                                          command=self._research_run)
+        self.research_btn.pack(side="right")
+
+        cards = ctk.CTkFrame(parent, fg_color="transparent")
+        cards.pack(fill="x", padx=4, pady=(0, 8))
+        self.research_cards = {}
+        for column, (key, title) in enumerate((("replay", "DESK REPLAY vs SPY"),
+                                               ("forward", "FORWARD TEST"),
+                                               ("rotation", "SECTOR ROTATION"))):
+            cards.columnconfigure(column, weight=1, uniform="research")
+            box = card(cards)
+            box.grid(row=0, column=column, sticky="nsew", padx=(0 if column == 0 else 6, 0))
+            Label(box, text=title, text_color=MUTED, font=("Segoe UI", 10, "bold"),
+                  anchor="w").pack(fill="x", padx=14, pady=(10, 2))
+            verdict = Label(box, text="—", font=("Segoe UI", 17, "bold"), anchor="w")
+            verdict.pack(fill="x", padx=14)
+            detail = Label(box, text="", text_color="#94a3b8", font=("Segoe UI", 11),
+                           anchor="w", justify="left", wraplength=330)
+            detail.pack(fill="x", padx=14, pady=(2, 12))
+            self.research_cards[key] = (verdict, detail)
+
+        chart_card = card(parent)
+        chart_card.pack(fill="x", padx=4, pady=(0, 8))
+        self.research_chart = tk.Canvas(chart_card, height=170, bg=CARD_2, highlightthickness=0)
+        self.research_chart.pack(fill="x", padx=10, pady=8)
+        self.research_chart.bind("<Configure>", lambda _e: self._research_draw())
+        self._research_replay = None
+
+        table_card = card(parent)
+        table_card.pack(fill="both", expand=True, padx=4, pady=(0, 4))
+        heading(table_card, "RULES THAT PASSED THE GATE — and what they did from 2025 on").pack(
+            fill="x", padx=14, pady=(10, 4))
+        self.research_table = self._table(
+            table_card, ("symbol", "rule", "trades", "rule %", "hold %", "drawdown", "verdict"),
+            {"symbol": 70, "rule": 85, "trades": 60, "rule %": 70, "hold %": 70,
+             "drawdown": 80, "verdict": 360}, 6, {"verdict"},
+            {"beat": GREEN, "lost": "#94a3b8"})
+        self.root.after(400, self._research_load)
+
+    def _research_load(self) -> None:
+        from config import DESK_DIR
+        folder = DESK_DIR / "research"
+
+        def read(name):
+            try:
+                return json.loads((folder / name).read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return None
+
+        replay, forward, rotation = read("replay.json"), read("forward.json"), read("rotation.json")
+        verdict, detail = self.research_cards["replay"]
+        if replay:
+            ahead = replay["return"] > replay["hold_return"]
+            verdict.configure(text=f"{replay['return']:+.1%}  vs  {replay['hold_return']:+.1%}",
+                              text_color=GREEN if ahead else RED)
+            detail.configure(text=f"Max drawdown {replay['drawdown']:.1%} vs {replay['hold_drawdown']:.1%} · "
+                                  f"{len(replay['trades'])} trades from {replay['start']} · rules only, judge excluded")
+        else:
+            verdict.configure(text="not run yet", text_color=MUTED)
+        self._research_replay = replay
+        self._research_draw()
+
+        verdict, detail = self.research_cards["forward"]
+        self.research_table.delete(*self.research_table.get_children())
+        if forward:
+            passed, rejected = forward["summary"]["passed"], forward["summary"]["rejected"]
+            verdict.configure(text=f"{passed['beat']} of {passed['n']} beat holding",
+                              text_color=GREEN if passed["n"] and passed["beat"] * 2 > passed["n"] else AMBER)
+            detail.configure(text=f"Gate-passed avg {passed['mean_return']:+.1%} vs hold {passed['mean_hold']:+.1%}. "
+                                  f"Rejected rules: {rejected['beat']} of {rejected['n']} beat holding — "
+                                  f"if that is close, the gate is not picking winners.")
+            for r in forward["rows"]:
+                if r["gate"]:
+                    self.research_table.insert("", "end", tags=("beat" if r["beat"] else "lost",), values=(
+                        r["symbol"], r["rule"], r["trades"], f"{r['return']:+.1%}", f"{r['hold']:+.1%}",
+                        f"{r['drawdown']:.1%}", r["basis"]))
+        else:
+            verdict.configure(text="not run yet", text_color=MUTED)
+
+        verdict, detail = self.research_cards["rotation"]
+        if rotation:
+            verdict.configure(text="passes" if rotation["passed"] else "research only",
+                              text_color=GREEN if rotation["passed"] else AMBER)
+            detail.configure(text="  ·  ".join(
+                f"{label}: {w['return']:+.1%} vs SPY {w['spy']:+.1%}"
+                for label, w in rotation["windows"].items()))
+        else:
+            verdict.configure(text="not run yet", text_color=MUTED)
+
+    def _research_draw(self) -> None:
+        canvas, replay = self.research_chart, self._research_replay
+        canvas.delete("all")
+        w, h = max(canvas.winfo_width(), 300), int(canvas["height"])
+        left, right, top, bottom = 12, w - 80, 24, h - 14
+        canvas.create_text(left, 6, anchor="nw", fill=MUTED, font=("Segoe UI", 9, "bold"),
+                           text="EQUITY · desk (rules only)  vs  holding SPY")
+        if not replay or len(replay["curve"]) < 2:
+            canvas.create_text(w // 2, h // 2, fill="#64748b", font=("Segoe UI", 10),
+                               text="Run the research to draw the replay")
+            return
+        desk = [e for _, e in replay["curve"]]
+        spy = [e for _, e in replay["benchmark"]]
+        lo, hi = min(desk + spy), max(desk + spy)
+        y = lambda v: bottom - (v - lo) / ((hi - lo) or 1) * (bottom - top)  # noqa: E731
+        for i in range(4):
+            value = lo + (hi - lo) * i / 3
+            canvas.create_line(left, y(value), right, y(value), fill="#1e293b")
+            canvas.create_text(right + 8, y(value), anchor="w", fill="#64748b",
+                               font=("Segoe UI", 8), text=f"${value:,.0f}")
+        for series, color, name in ((spy, "#94a3b8", "SPY"), (desk, ACCENT, "Desk")):
+            step = (right - left) / (len(series) - 1)
+            points = [c for i, v in enumerate(series) for c in (left + i * step, y(v))]
+            canvas.create_line(*points, fill=color, width=2)
+            canvas.create_text(right - 4, y(series[-1]) - 8, anchor="se", fill=color,
+                               font=("Segoe UI", 10, "bold"), text=f"{name} ${series[-1]:,.0f}")
+
+    def _research_run(self) -> None:
+        self.research_btn.configure(state="disabled")
+        self.research_status.configure(text="running (a few minutes; fetches price history)…")
+
+        def work() -> None:
+            from config import DESK_UNIVERSE
+            import desk_forward
+            import desk_replay
+            import desk_rotation
+            errors = []
+            for step in (lambda: desk_forward.run(DESK_UNIVERSE), lambda: desk_replay.run(DESK_UNIVERSE),
+                         desk_rotation.main):
+                try:
+                    step()
+                except Exception as exc:  # noqa: BLE001 — report, keep the other two
+                    errors.append(str(exc))
+            self.root.after(0, lambda e=errors: self._research_done(e))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _research_done(self, errors: list) -> None:
+        self.research_btn.configure(state="normal")
+        self.research_status.configure(
+            text=("updated" if not errors else "some steps failed: " + "; ".join(errors)[:120]))
+        self._research_load()
 
     # ------------------------------------------------------------------ Desk
     #

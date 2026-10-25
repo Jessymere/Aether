@@ -59,3 +59,16 @@ def test_replay_with_no_rules_stays_in_cash():
     spy = daily([100.0 + i * 0.1 for i in range(700)], symbol="SPY")
     r = R.simulate({}, {"SPY": spy}, capital=10_000, costs=(0, 0))
     assert r["return"] == 0 and all(e == 10_000 for _, e in r["curve"])
+
+
+def test_rotation_holds_the_strongest_sectors_and_goes_to_cash_when_all_fall():
+    import desk_rotation as ROT
+    up = daily([100.0 * 1.001 ** i for i in range(700)], symbol="UP")
+    flat = daily([100.0] * 700, symbol="FLAT")
+    down = daily([100.0 * 0.999 ** i for i in range(700)], symbol="DOWN")
+    r = ROT.rotate({"UP": up, "FLAT": flat, "DOWN": down}, "2024-06-01", top=1, cost_bps=0)
+    assert r["return"] > 0 and r["drawdown"] < 1e-9           # always in the rising one
+    crash = {"A": daily([100.0 * 0.998 ** i for i in range(700)], symbol="A"),
+             "B": daily([100.0 * 0.997 ** i for i in range(700)], symbol="B")}
+    r = ROT.rotate(crash, "2024-06-01", top=1, cost_bps=0)
+    assert r["return"] == 0                                    # nothing positive: cash
