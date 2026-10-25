@@ -1,0 +1,90 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Repository layout
+
+The repo root is the project: "Aether", a multi-agent coding assistant with a trading desk. Models are hosted (OpenRouter free tier by default); Ollama is only the offline fallback. There is no `pyproject.toml` or venv — the builder is stdlib + `urllib` (plus `psutil`, listed in `requirements.txt`).
+
+History was rewritten on 2026-10-24 to move the project up from `2026-10-16/hey-i-have-local/outputs/multi_ai_builder/` and drop model weights, build output and private data; the pre-rewrite `.git` is at `C:\Users\jessy\Documents\Codex-git-backup-2026-10-24`. The repo is **public**: `memory.db`, `memory.md`, `vault/conversation-summary.md`, `runs/` and `.env` are gitignored and must stay that way.
+
+## Commands
+
+All from the repo root.
+
+```powershell
+python main.py "<request>"            # CLI: chat, Q&A, system control, or build
+python desktop_ui.py                  # Tkinter app — this is what ships as Aether.exe
+python web_ui.py                      # browser UI on 127.0.0.1:8765
+python self_improve.py --rounds 1     # builder improves itself (approval required)
+
+python -m pytest tests -q                          # full suite (177 tests, ~10s)
+python -m pytest tests/test_orchestrator_intent.py -q   # one file
+python -m pytest tests -q -k classify_intent            # one test
+
+powershell -ExecutionPolicy Bypass -File .\build_aether.ps1   # -> dist\Aether\Aether.exe
+```
+
+Tests deliberately never hit the network — `tests/conftest.py` monkeypatches `ollama_client.chat`.
+
+CLI flags: `--auto-approve`, `--fast` (4B everywhere except coder/reviewer), `--quality-rounds 0..2`, `--project <path>`, `--web` / `--auto-web`, `--preflight` (print a model-availability table and exit), `--auto-models` (swap in local fallbacks when the gateway key is absent). `preflight.py` owns model-availability truth and powers both.
+
+## Architecture
+
+**One pipeline, three front ends.** `orchestrator.py` holds the class `Orchestrator` and the dataclass `OrchestrationResult`. `main.py` (CLI), `desktop_ui.py` (Tkinter/exe), and `web_ui.py` (browser) all drive `Orchestrator.run()` and then `apply_proposal()` — including the web UI's `/approve` handler, so approval on every surface gets the rollback backup, the containment check, and the CHANGELOG note. A pipeline change belongs in `orchestrator.py` alone.
+
+**Failures keep their stack.** `run()` catches everything into `result.error`; it also stores `result.traceback` and prints it, because otherwise a one-line bug in a stage is indistinguishable from an agent failing.
+
+**Intent routing comes first.** `classify_intent()` uses the planner model to sort a request into `chat` / `question` / `system` / `build`. Chat and question short-circuit the pipeline (greetings return canned strings with zero Ollama calls). `system` goes to `system.handle_system_request()` — open apps/files, list dirs, run safe shell commands, also zero Ollama calls. Only `build` enters the agent pipeline.
+
+**Build pipeline order** (`run()`): context gathering (project files + `vault/` + `memory.md`) → optional web brief → planner → clarification loop → coder → reviewer ↔ revise loop bounded by `quality_rounds` and a `LoopGuard` → security review → `decide_proposal()` gate → sandbox validation → tester → release → save run → optional auto-approve. Cancellation is checked between every stage via `_check_cancelled()`.
+
+**The trading desk is a fourth intent.** `classify_intent()` can return `desk` (phrases like "run the desk", "backtest SPY", "panic"); `run()` dispatches to `run_desk()` instead of the build pipeline. It is a separate pipeline sharing only `OrchestrationResult` and the callback contract, and it lives in flat `desk_*.py` modules rather than a package because `build_aether.ps1` compiles and hidden-imports an explicit file list. Cycle order is fixed in `desk_runner._cycle`: exits → scan → gate → walk-forward gate → judge → gate → size → fill → ledger → risk. Two rules carry the design: **a seat that researches never places an order, and a seat that places orders never gets an opinion**; **code does the arithmetic, the judge does the judgement.** Every path writes a decision row, skips included — a skip is a first-class row carrying `vetoed_by` and a reason, so the ledger can answer "what did it decline, and why".
+
+**Live crypto execution is `desk_broker.JupiterBroker`.** It quotes and swaps through Jupiter, signs locally in `desk_solana.py`, and needs no Solana SDK — base58 is ~20 lines of Python and the signature is `pynacl`, which is the one runtime extra (`requirements-desk.txt`). The wire format was established against mainnet rather than assumed: the signed payload is the **version prefix plus the message**, and `sign_transaction()` refuses a version-1 transaction, a payer that is not ours, or a header that disagrees with the signature count. `make_broker()` gates on `can_trade` (a key that parses), not `configured` (a key *or* an address) — an address alone can be watched but never signed, and quietly paper-filling beats skipping every candidate. Cost basis and `symbol -> mint` come from the ledger (`desk_ledger.mint_map`, `costs`), because the chain knows what is held and has no idea what it cost.
+
+**`desk_broker.RobinhoodBroker` is the other crypto path**, chosen with `DESK_CRYPTO_BROKER=robinhood`: a custodial account instead of a self-custody wallet. That API accepts no unsigned call, so the signing string is `api_key + timestamp + path + method + body` signed with an Ed25519 key and base64'd into `x-signature` (the path comes **before** the method — published summaries often reverse it, and a reversed string still signs and verifies, so it only shows up as a live 401) — the body is serialised once and both signed and sent from that same string, because a mismatch is a 401. The API key alone authenticates nothing; `python -m desk_keys` generates the pair, the public half is uploaded to Robinhood and the private half goes in `.env`. `can_trade` therefore means *both* halves parse, and the venue still degrades to paper until then. Robinhood calls the open book "holdings" and pairs the symbol as `BTC-USD`; the order body's `market_order_config.asset_quantity` is retried once as a plain `quantity` on a 400, since some accounts still take the older equities-shaped body. `can_trade` is *authority*, not *funding*: signed reads succeed on an unfunded account with `buying_power: "0.0000"`, so a live venue whose `cash()` is 0 accepts keys and then rejects every buy into a `None` fill. Fund the account before trusting a live run.
+
+
+**Model routing** lives in `config.MODELS`, keyed by role, and is resolved by **`config.model_route(model) -> (base_url, api_key, surface)`** — the single source of truth. `surface` is a provider name (`"gateway"`, `"nim"`, `"openrouter"`) or `"local"`, and `ollama_client` uses it to pick the wire format (`/v1/chat/completions`, OpenAI-style, for every hosted provider; `/api/chat` for Ollama). Never infer the surface from whether an API key happens to be set — that mismatch was a real 401 bug. Ownership is explicit: a slug is cloud only if it is in `config.MODEL_PROVIDERS` (or `GATEWAY_MODEL_SLUGS`), and anything else is local, so an unknown slug degrades to Ollama instead of guessing. The defaults are free hosted models, and the reviewer sits on a different provider from the rest so one free tier's 429 cannot stall the review loop. Note `use_fast_models()` mutates the module-level `MODELS` dict in place rather than swapping a reference.
+
+Two provider quirks are handled in `ollama_client` and must stay: free tiers answer `429` to a burst (retried on a longer backoff than a 5xx), and NIM's reasoning models return `content: null` with the text in `reasoning_content` (`_message_text` falls back). OpenRouter's `thinkingmachines/*:free` endpoints are gated to "agentic harnesses" and 403 a plain API call regardless of headers, so they are not used.
+
+**Agents talk to each other.** `message_bus.py` carries agent-to-agent messages; `orchestrator.run()` publishes at each stage and `agents.ask*(..., bus=..., agent_name=...)` prepends recent bus traffic to the prompt. It is broadcast-plus-context, not request/reply — `unread()`/`mark_read()` exist but nothing calls them. Every run record embeds that run's slice of the bus as `agent_conversation` (via `bus.transcript(since=...)`), which is the auditable trail of what the agents said to each other.
+
+**`parse_proposal()` is the normalisation boundary.** Models return `null` for `summary`/`content` and occasionally `null` entries inside `files`. `parse_proposal()` coerces those to `""` and raises a named error for unusable entries, because downstream code slices `summary` and indexes `item["path"]` without re-checking. Anything building a proposal dict by hand should go through it.
+
+## Safety gates (preserve these when editing)
+
+- `parse_proposal()` rejects absolute paths and `..` traversal before anything is written.
+- `apply_proposal()` re-resolves each target and refuses writes outside the project folder.
+- `validate_proposal()` copies the proposal to a temp sandbox and runs `compileall` + `unittest discover` there; approval is gated on it passing. It returns "skipped" when `sys.frozen` — the exe bundles no Python interpreter.
+- `patch_notes.backup_files()` copies files to `<project>/.aether/backups/<timestamp>/` before overwriting; rollback restores the newest.
+- Approved writes append to the project's `CHANGELOG.md` via `append_patch_note()`.
+- `system.run_command()` classifies a command rather than substring-matching it: pipes and chaining (`|`, `&`) are allowed, and only a destructive *verb* (`del`, `rd`, `rmdir`, `format`, `shutdown`, …) blocks it. `force=True` bypasses the gate; a `>` redirect onto an existing file emits a truncation warning.
+- Web content is treated as untrusted reference material; web access is off unless requested.
+- The desk degrades instead of crashing: a venue with no credentials runs `paper` even when `live` was requested, an unparseable judge answer becomes `skip` (never `buy`), and a brain error is a skip carrying its reason. `DESK_EXECUTION_MODE` is read from config and never inferred from a key being present.
+- `desk_backtest.evaluate()` benches a rule that has not survived every verdict — the walk-forward gate runs on train years only, then on folds the rule never saw, then on a holdout. A signal on bar `i`'s close fills at bar `i+1`'s open; costs are charged on both legs. Changing a threshold or a split is a strategy change, not a cosmetic one.
+- `JupiterBroker` never spends the fee reserve (`SOLANA_MIN_SOL`), caps a buy at the free balance and a sell at what is actually held, and refuses a quote over `SOLANA_MAX_PRICE_IMPACT_PCT`. A swap that raises still returns `None` rather than an exception, because one bad token must not end the cycle.
+- `RobinhoodBroker` signs the exact bytes it sends — build the body, serialise once, sign that string, transmit that string. Never sign a re-serialised copy, because key order or whitespace differences produce a valid-looking 401.
+- The desk also learns per rule: `closed_trades()` now carries the `rule_id` that opened each trade, and `rule_records()` groups them by rule. A rule whose own closed trades fall below `DESK_RECORD_WIN_FLOOR` with at least `DESK_RECORD_MIN_TRADES` is stood down by name, so the historical gate never even sees it.
+- `DeskRunner.panic()` sets the in-memory halt, writes `desk/KILL`, and flattens every position; `resume()` clears both. The kill switch also fires on the daily-loss and drawdown ceilings in `risk_check()`.
+- The desk learns from its own ledger and nothing else. `desk_ledger.closed_trades()` rebuilds finished round trips by FIFO against a per-symbol cost basis (both legs' fees charged), `desk_seats.record_summary()` turns them into win rate and expectancy, and the summary goes two places: as `record_*` facts into the judge prompt, and through `adapt_dial()`, which can only *cut* the dial — below `DESK_RECORD_WIN_FLOOR` with at least `DESK_RECORD_MIN_TRADES` closed it scales size down (never past a quarter) and never raises it. Paper and live records stay separate. There is no model retraining; "learning" is arithmetic over the log.
+- Position size and stop distance both scale with the name's own `desk_seats.atr_pct()` (mean true range over 14 bars, clamped 0.5–25%). A fetch with no history falls back to `DEFAULT_ATR_PCT` from `DESK_REFERENCE_ATR_PCT`. Sizing is risk-parity *downward only*: above the reference a name is sized back so a stop-out costs the same dollars whatever the ticker, while a calmer name risks less than that rather than exceeding its budget. The stop is 2 ranges and the target 3, so the 2:3 ratio is fixed and only the distance fits the instrument. `positions.atr_pct` carries the entry reading so a restart trails on the same scale; `connect()` back-fills that column (and any future one, via `_ADDED_COLUMNS`) because `CREATE TABLE IF NOT EXISTS` never widens an existing table.
+- Speed on the hot path is bounded by caches, not retries: bars 5 min, dial 1 h (over a ~420-day window — enough for the 200-day average — not a decade), marks 20 s (the exit loop and the snapshot mark the same symbol in one cycle), and a judge verdict 15 min per symbol, copied rather than handed out so this cycle's `vetoed_by` stamp does not leak into the next row. The judge cache is the one to be careful with: it is keyed on symbol alone, so a fact that changes intraday without the bars (price, record) is not re-judged within the window. `fetch_json` asks for gzip/deflate and decompresses by hand, because `urllib` does neither.
+
+## Memory layers
+
+`vault/` (plain `.md` files, read at the start of every run and editable from the desktop app), `memory.md` (durable preferences, injected into planning), `memory.db` (SQLite facts via `memory_store.py`), `runs/*.json` (full transcripts), `runs/conversation.json` (chat history replayed on startup).
+
+The desk keeps its own append-only ledger in `desk.db` (`candidates`, `decisions`, `verdicts`, `fills`, `positions`, `equity`, `runs`) via `desk_ledger.py`. `desk/` holds generated state — `cache/`, `logs/`, `KILL`, `dial.json` — and both are gitignored. Rows are append-only apart from `positions`; the ledger is the audit trail the desk is judged on, so do not "tidy" old rows.
+
+## Gotchas
+
+- Legacy `decisions_client.py` removed; `agents.py` imports `decision_client.py`, which is now used by `tests/test_decision_client.py` and `build_aether.ps1`.
+- The 20 one-off migration scripts (`fix_*.py`, `append_deci*.py`) live in `archive/`, not the project root — see `archive/README.md`. They are not importable modules.
+- `EXPLABS_API_KEY`, `NVIDIA_API_KEY`, `OPENROUTER_API_KEY`, `ROBINHOOD_API_KEY` and `ROBINHOOD_PRIVATE_KEY` are loaded from the root `.env` by `config._load_dotenv()` at import time. A real environment variable wins for everything *except* those keys, where the file is authoritative — a stale exported key is indistinguishable from a fresh one and the file is what gets edited. `.env` is gitignored.
+- `mcp_servers.json` gates write-capable MCP tools behind `--approve`; `git_project` is disabled despite the outer repo existing.
+- `config.VERSION` is `1.0.0` and `UPDATE_MANIFEST_URL` is still the placeholder `your-server.com`.
+- `training/` is deliberately isolated (unsloth/torch via its own `training/.venv`) — never install those into the builder runtime.
+- `build_aether.ps1` bundles `vault/`, `memory.md`, `memory.db`, `mcp_servers.json` as data files; add new data files to both its `--add-data` list and `Aether.spec`.

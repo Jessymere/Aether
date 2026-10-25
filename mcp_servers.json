@@ -4,13 +4,13 @@
       "enabled": true,
       "description": "Read and manage only the builder workspace.",
       "command": "cmd",
-      "args": ["/c", "npx", "-y", "@modelcontextprotocol/server-filesystem", "C:\\Users\\jessy\\Documents\\Codex\\2026-10-16\\hey-i-have-local\\outputs\\multi_ai_builder\\workspace"]
+      "args": ["/c", "npx", "-y", "@modelcontextprotocol/server-filesystem", "C:\\Users\\jessy\\Documents\\Codex\\workspace"]
     },
     "git_project": {
       "enabled": false,
       "description": "Inspect and manage Git history for this project.",
       "command": "uvx",
-      "args": ["mcp-server-git", "--repository", "C:\\Users\\jessy\\Documents\\Codex\\2026-10-16\\hey-i-have-local\\outputs\\multi_ai_builder"]
+      "args": ["mcp-server-git", "--repository", "C:\\Users\\jessy\\Documents\\Codex"]
     },
     "fetch_web": {
       "enabled": true,

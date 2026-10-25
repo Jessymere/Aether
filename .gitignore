@@ -28,3 +28,13 @@ dist/
 training/.venv/
 training/dataset.jsonl
 training/candidates.jsonl
+
+# Private: Aether's memory of you and its chat summary. Kept on disk, never pushed.
+memory.db
+memory.md
+vault/conversation-summary.md
+
+# Local scratch
+work/
+_probe_*.py
+
