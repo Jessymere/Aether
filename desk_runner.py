@@ -39,6 +39,7 @@ from config import (
     DESK_START_CAPITAL,
     desk_costs,
 )
+from desk_backtest import RULES
 from desk_broker import Order, PaperBroker, make_broker
 from desk_data import Candidate, DataUnavailable
 from desk_ledger import (
@@ -48,6 +49,7 @@ from desk_ledger import (
     delete_position,
     fills_for,
     mint_map,
+    now,
     open_positions,
     record_candidate,
     record_decision,
@@ -56,6 +58,7 @@ from desk_ledger import (
     record_run,
     record_verdict,
     rule_records,
+    set_candidate_rule,
     set_candidate_status,
     upsert_position,
 )
@@ -81,7 +84,7 @@ from desk_seats import (
 
 DEFAULT_VENUES = ("stocks", "crypto")
 #: How many candidates per venue enter the (expensive) walk-forward gate.
-GATE_LIMIT = 5
+GATE_LIMIT = 12
 #: Daily bars barely move intraday, so a cycle re-reads them rather than the
 #: wire. Five minutes keeps the history gate honest without hammering Yahoo.
 BAR_CACHE_SECONDS = 300
@@ -160,7 +163,7 @@ class DeskRunner:
                  log_cb: Optional[Callable] = None,
                  cancel_cb: Optional[Callable] = None,
                  starting_cash: float = DESK_START_CAPITAL,
-                 scan_limit: int = 8) -> None:
+                 scan_limit: int = 12) -> None:
         self.venues = list(venues or DEFAULT_VENUES)
         self.requested_mode = (mode or DESK_EXECUTION_MODE or "paper").lower()
         self.brain = brain
@@ -450,32 +453,38 @@ class DeskRunner:
         from desk_backtest import RULES, evaluate
 
         if not bars:
-            return True, "no history — liquidity gate only"
+            # Fail closed: no history means no rule was validated, and a fetch
+            # that failed once must not let a name through untested.
+            return False, "no daily history to validate a rule on"
         blocked = self._rule_blocks.get(cand.venue, {})
-        key = (cand.symbol, cand.rule_id or "ma_cross", tuple(sorted(blocked)))
-        if key in self._verdict_cache:
-            return self._verdict_cache[key]
-
-        passed, reason = False, "benched"
-        for rule in RULES.values():
-            if rule.rule_id in blocked:
-                reason = "benched"
-                continue
-            ok, verdicts = evaluate(cand.symbol, bars, rule, costs=desk_costs(cand.venue))
-            for verdict in verdicts:
-                record_verdict(self.conn, verdict)
-            if ok:
-                passed, reason = True, f"passed all verdicts ({rule.rule_id})"
-                cand.rule_id, cand.params = rule.rule_id, {}
-                break
-            if reason == "benched":
-                reason = verdicts[-1].verdict if verdicts else "benched"
-        if not passed:
-            if blocked and reason == "benched":
-                reason = f"every rule record-benched ({self._block_note(blocked)})"
-            else:
-                reason = f"every rule benched (stopped at '{reason}')"
-        self._verdict_cache[key] = (passed, reason)
+        # The verdict is a daily fact; a runner that lives for days re-judges.
+        key = (cand.symbol, now()[:10], tuple(sorted(blocked)))
+        if key not in self._verdict_cache:
+            passed, reason, rule_id, params = False, "benched", "", {}
+            for rule in RULES.values():
+                if rule.rule_id in blocked:
+                    reason = "benched"
+                    continue
+                ok, verdicts = evaluate(cand.symbol, bars, rule, costs=desk_costs(cand.venue))
+                for verdict in verdicts:
+                    record_verdict(self.conn, verdict)
+                if ok:
+                    passed, reason = True, f"passed all verdicts ({rule.rule_id})"
+                    rule_id = rule.rule_id
+                    params = next((v.metrics.get("params") or {} for v in verdicts
+                                   if v.verdict == "train"), {})
+                    break
+                if reason == "benched":
+                    reason = verdicts[-1].verdict if verdicts else "benched"
+            if not passed:
+                if blocked and reason == "benched":
+                    reason = f"every rule record-benched ({self._block_note(blocked)})"
+                else:
+                    reason = f"every rule benched (stopped at '{reason}')"
+            self._verdict_cache[key] = (passed, reason, rule_id, params)
+        passed, reason, rule_id, params = self._verdict_cache[key]
+        if passed:  # stamped on a cache hit too, or the trade carries no rule
+            cand.rule_id, cand.params = rule_id, dict(params)
         return passed, reason
 
     # -- one cycle ----------------------------------------------------------
@@ -485,12 +494,14 @@ class DeskRunner:
         # 1. exits first, so cash and slots free up for this cycle. The stops
         # live in the ledger, not in the broker: a live broker reports what the
         # chain holds and knows nothing about our entry or our limits.
-        stops = {p.symbol: (p.stop, p.take, p.atr_pct)
+        stops = {p.symbol: (p.stop, p.take, p.atr_pct, p.rule_id, p.params)
                  for p in open_positions(self.conn, broker.mode)}
         for position in list(broker.positions()):
-            position.stop, position.take, position.atr_pct = stops.get(
+            (position.stop, position.take, position.atr_pct,
+             position.rule_id, position.params) = stops.get(
                 position.symbol,
-                (position.stop, position.take, position.atr_pct))
+                (position.stop, position.take, position.atr_pct,
+                 position.rule_id, position.params))
             price = self._mark(position.symbol, position.avg_price)
             self._marks[position.symbol] = price
             # Ratchet before testing: a winner that has given back part of its
@@ -504,6 +515,13 @@ class DeskRunner:
                 if held is not None:
                     held.stop = trailed
             why = should_exit(position, price)
+            if not why and position.rule_id in RULES:
+                # The ATR stop is a safety net; the rule's own exit is the one
+                # the backtest was judged on.
+                closes = [b.close for b in self._bars(Candidate(symbol=position.symbol,
+                                                                venue=venue))]
+                if closes and RULES[position.rule_id].exit(closes, position.params):
+                    why = f"{position.rule_id} exit signal"
             if not why:
                 continue
             fill = broker.submit(Order(symbol=position.symbol, side="sell",
@@ -561,15 +579,16 @@ class DeskRunner:
                 continue
 
             bars = self._bars(cand)
-            if not bars and cand.venue == "crypto":
-                # A token new enough to have no history still trades; we say so
-                # rather than pretending a verdict happened.
-                self._say(f"{venue}: {cand.symbol} has no daily history — "
-                          f"liquidity gate only")
-
             passed, reason = self._walk_forward(cand, bars)
             if not passed:
                 self._skip(cand, candidate_id, reason, "walk_forward", result)
+                continue
+            set_candidate_rule(self.conn, candidate_id, cand.rule_id, cand.params)
+            # The gate proved the rule's *signals* make money, so trade only on
+            # them: without this the desk bought any day the judge liked a name.
+            if not RULES[cand.rule_id].entry([b.close for b in bars], cand.params):
+                self._skip(cand, candidate_id, f"no {cand.rule_id} entry signal today",
+                           "signal", result)
                 continue
             result.gated += 1
 
@@ -610,7 +629,8 @@ class DeskRunner:
             fill.candidate_id, fill.decision_id = candidate_id, decision.id
             record_fill(self.conn, fill)
             position = position_from_fill(cand.symbol, fill.qty, fill.price, venue,
-                                          broker.mode, risk_pct)
+                                          broker.mode, risk_pct,
+                                          rule_id=cand.rule_id, params=cand.params)
             upsert_position(self.conn, position)
             # Give the broker's own copy the same stop and target, otherwise
             # should_exit() on the next cycle compares against None and the

@@ -528,10 +528,12 @@ def stop_and_take(price: float, atr_pct: float = DEFAULT_ATR_PCT) -> tuple[float
 
 
 def position_from_fill(symbol: str, qty: float, price: float, venue: str,
-                       mode: str, atr_pct: float = DEFAULT_ATR_PCT) -> Position:
+                       mode: str, atr_pct: float = DEFAULT_ATR_PCT,
+                       rule_id: str = "", params: Optional[dict] = None) -> Position:
     stop, take = stop_and_take(price, atr_pct)
     return Position(symbol=symbol, qty=qty, avg_price=price, venue=venue,
-                    stop=stop, take=take, atr_pct=atr_pct, mode=mode)
+                    stop=stop, take=take, atr_pct=atr_pct, mode=mode,
+                    rule_id=rule_id, params=dict(params or {}))
 
 
 def trail_stop(position: Position, price: float,

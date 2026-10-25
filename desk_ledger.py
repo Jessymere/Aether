@@ -157,7 +157,9 @@ def connect(path: Path | str = DESK_DB) -> sqlite3.Connection:
 
 
 #: (table, column, declaration) added after their tables shipped.
-_ADDED_COLUMNS = (("positions", "atr_pct", "REAL"),)
+_ADDED_COLUMNS = (("positions", "atr_pct", "REAL"),
+                  ("positions", "rule_id", "TEXT"),
+                  ("positions", "params_json", "TEXT"))
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
@@ -217,6 +219,10 @@ class Position:
     #: stretched over both a meme coin and the S&P.
     atr_pct: float = 0.04
     mode: str = "paper"
+    #: The gate-validated rule that opened it, and its tuned parameters, so the
+    #: position exits on the same signal the backtest exited on.
+    rule_id: str = ""
+    params: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -365,12 +371,14 @@ def record_run(conn: sqlite3.Connection, mode: str, n_candidates: int, n_gated: 
 def upsert_position(conn: sqlite3.Connection, pos: Position) -> None:
     conn.execute(
         "INSERT INTO positions (ts, symbol, venue, qty, avg_price, stop, take,"
-        " atr_pct, mode) VALUES (?,?,?,?,?,?,?,?,?)"
+        " atr_pct, mode, rule_id, params_json) VALUES (?,?,?,?,?,?,?,?,?,?,?)"
         " ON CONFLICT(symbol, mode) DO UPDATE SET ts=excluded.ts, qty=excluded.qty,"
         " avg_price=excluded.avg_price, stop=excluded.stop, take=excluded.take,"
-        " atr_pct=excluded.atr_pct",
+        " atr_pct=excluded.atr_pct, rule_id=excluded.rule_id,"
+        " params_json=excluded.params_json",
         (now(), pos.symbol, pos.venue, float(pos.qty), float(pos.avg_price),
-         pos.stop, pos.take, float(pos.atr_pct or 0.04), pos.mode),
+         pos.stop, pos.take, float(pos.atr_pct or 0.04), pos.mode,
+         pos.rule_id, json.dumps(pos.params or {})),
     )
     conn.commit()
 
@@ -385,17 +393,28 @@ def delete_position(conn: sqlite3.Connection, symbol: str, mode: str = "paper") 
 # ---------------------------------------------------------------------------
 def open_positions(conn: sqlite3.Connection, mode: str = "paper") -> list[Position]:
     rows = conn.execute(
-        "SELECT symbol, venue, qty, avg_price, stop, take, atr_pct, mode"
-        " FROM positions WHERE mode = ? AND qty > 0",
+        "SELECT symbol, venue, qty, avg_price, stop, take, atr_pct, mode,"
+        " rule_id, params_json FROM positions WHERE mode = ? AND qty > 0",
         (mode,),
     ).fetchall()
     return [
         Position(symbol=r["symbol"], qty=r["qty"], avg_price=r["avg_price"],
                  venue=r["venue"] or "", stop=r["stop"], take=r["take"],
                  atr_pct=r["atr_pct"] if r["atr_pct"] is not None else 0.04,
-                 mode=r["mode"])
+                 mode=r["mode"], rule_id=r["rule_id"] or "",
+                 params=json.loads(r["params_json"] or "{}"))
         for r in rows
     ]
+
+
+def set_candidate_rule(conn: sqlite3.Connection, candidate_id: int,
+                       rule_id: str, params: dict) -> None:
+    """Stamp the rule that cleared the gate. The row is written before the gate
+    runs, so without this every candidate's rule_id stayed '' and the per-rule
+    record could never stand a losing rule down."""
+    conn.execute("UPDATE candidates SET rule_id = ?, params_json = ? WHERE id = ?",
+                 (rule_id, json.dumps(params or {}), candidate_id))
+    conn.commit()
 
 
 def fills_for(conn: sqlite3.Connection, mode: str = "paper",

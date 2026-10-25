@@ -305,7 +305,7 @@ class Orchestrator:
     # Trading desk
     # ------------------------------------------------------------------
     def run_desk(self, cycles: int = 1, venues: Optional[list[str]] = None,
-                 mode: Optional[str] = None, scan_limit: int = 8) -> str:
+                 mode: Optional[str] = None, scan_limit: int = 12) -> str:
         """Run N desk cycles and return the human-readable report.
 
         The desk sits deliberately *outside* the build pipeline: it writes to

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+import desk_backtest
 import desk_runner as R
 from desk_data import Bar, Candidate
 from desk_ledger import connect, counts, open_positions
@@ -23,12 +24,30 @@ def runner(desk_env, stub_brain, monkeypatch, **kw):
     return R.DeskRunner(venues=venues, mode="paper", **kw)
 
 
+def pass_gate(monkeypatch):
+    """Stub the walk-forward gate to pass with a rule that signals every day.
+
+    The real gate benches synthetic candles, and since the desk now trades only
+    on a validated rule's own signals, a stub must name a rule as well as pass.
+    """
+    rule = desk_backtest.Rule(rule_id="always", entry=lambda c, p: True,
+                              exit=lambda c, p: False, grid=[{}])
+    monkeypatch.setitem(R.RULES, "always", rule)
+
+    def walk_forward(self, cand, bars):
+        cand.rule_id, cand.params = "always", {}
+        return True, "stubbed"
+
+    monkeypatch.setattr(R.DeskRunner, "_walk_forward", walk_forward)
+
+
 @pytest.fixture
 def one_candidate(monkeypatch):
     cand = Candidate(symbol="SPY", venue="stocks", source="yahoo", price=400.0,
                      raw={"bars_count": 400})
     monkeypatch.setattr(R, "scan", lambda venue, limit, source=None: [cand])
     monkeypatch.setattr(R, "bars_for", lambda c, source=None: [])
+    pass_gate(monkeypatch)
     return cand
 
 
@@ -165,8 +184,7 @@ def fill_qty(desk_env, stub_brain, monkeypatch, span):
         for sym in ("SPY", "QQQ")])
     monkeypatch.setattr(R, "bars_for",
                         lambda c, source=None: swinging(span=span if c.symbol == "QQQ" else 1.0))
-    monkeypatch.setattr(R.DeskRunner, "_walk_forward",
-                        lambda self, cand, bars: (True, "stubbed"))
+    pass_gate(monkeypatch)
     runner(desk_env, stub_brain, monkeypatch).run(cycles=1)
     conn = connect(desk_env["db"])
     return {r["symbol"]: r["qty"] for r in
@@ -182,8 +200,7 @@ def test_the_filled_position_carries_its_range(desk_env, stub_brain, monkeypatch
     monkeypatch.setattr(R, "scan", lambda venue, limit, source=None: [
         Candidate(symbol="SPY", venue="stocks", price=260.0, raw={"bars_count": 400})])
     monkeypatch.setattr(R, "bars_for", lambda c, source=None: swinging(span=8.0))
-    monkeypatch.setattr(R.DeskRunner, "_walk_forward",
-                        lambda self, cand, bars: (True, "stubbed"))
+    pass_gate(monkeypatch)
 
     r = runner(desk_env, stub_brain, monkeypatch)
     r.run(cycles=1)
@@ -728,3 +745,41 @@ def test_a_failed_mark_returns_the_fallback_and_is_not_cached(desk_env, stub_bra
     r = runner(desk_env, stub_brain, monkeypatch)
     assert r._mark("SPY", 42.0) == 42.0
     assert "SPY" not in r._mark_cache  # a failure is retried next cycle
+
+
+# ---------------------------------------------------------------------------
+# The desk trades the validated rule's own signals
+# ---------------------------------------------------------------------------
+def test_no_entry_signal_today_means_no_buy(desk_env, stub_brain, monkeypatch, one_candidate):
+    pass_gate(monkeypatch)
+    monkeypatch.setitem(R.RULES, "always", desk_backtest.Rule(
+        rule_id="always", entry=lambda c, p: False, exit=lambda c, p: False, grid=[{}]))
+    result = runner(desk_env, stub_brain, monkeypatch).run(cycles=1)
+    assert result.filled == 0
+    row = connect(desk_env["db"]).execute("SELECT vetoed_by, skipped_reason FROM decisions").fetchone()
+    assert row["vetoed_by"] == "signal" and "entry signal" in row["skipped_reason"]
+
+
+def test_the_rules_exit_signal_sells_and_the_rule_is_recorded(
+        desk_env, stub_brain, monkeypatch, one_candidate):
+    monkeypatch.setattr(R, "bars_for", lambda c, source=None: make_bars(30))
+    exits = {"now": False}
+    monkeypatch.setitem(R.RULES, "always", desk_backtest.Rule(
+        rule_id="always", entry=lambda c, p: True, exit=lambda c, p: exits["now"], grid=[{}]))
+    r = runner(desk_env, stub_brain, monkeypatch)
+    r.run(cycles=1)
+    conn = connect(desk_env["db"])
+    assert open_positions(conn)[0].rule_id == "always"
+    assert conn.execute("SELECT rule_id FROM candidates").fetchone()["rule_id"] == "always"
+
+    exits["now"] = True
+    monkeypatch.setattr(R, "scan", lambda venue, limit, source=None: [])
+    r.run(cycles=1)
+    assert open_positions(conn) == []
+    assert conn.execute("SELECT COUNT(*) FROM fills WHERE side = 'sell'").fetchone()[0] == 1
+
+
+def test_missing_history_fails_the_gate_closed(desk_env, stub_brain, monkeypatch):
+    r = runner(desk_env, stub_brain, monkeypatch)
+    ok, reason = R.DeskRunner._walk_forward(r, Candidate(symbol="SPY", venue="stocks"), [])
+    assert ok is False and "no daily history" in reason

@@ -10,7 +10,11 @@ import desk_brain as DB
 # ---------------------------------------------------------------------------
 def test_action_coercion_handles_prose():
     assert DB._coerce_action("BUY") == "buy"
-    assert DB._coerce_action("I would buy this") == "buy"
+    assert DB._coerce_action(" Buy. ") == "buy"
+    # Anything but the bare word is unclear, and unclear is a skip — never a buy.
+    assert DB._coerce_action("I would buy this") == "skip"
+    assert DB._coerce_action("skip, not a buy") == "skip"
+    assert DB._coerce_action("buy|hold|skip") == "skip"
     assert DB._coerce_action("skip.") == "skip"
     assert DB._coerce_action("hold") == "hold"
 

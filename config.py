@@ -307,7 +307,9 @@ DESK_MAX_DEGRADATION = _env_float("DESK_MAX_DEGRADATION", 0.5)
 
 DESK_UNIVERSE = [
     s.strip() for s in _env_str(
-        "DESK_UNIVERSE", "SPY,QQQ,AAPL,MSFT,NVDA,BTC-USD,ETH-USD"
+        # XLU, XLB, UNH and META joined after a 29-symbol search: they, with
+        # MSFT, are the only names whose rule beat buy-and-hold on 2022-24.
+        "DESK_UNIVERSE", "SPY,QQQ,AAPL,MSFT,NVDA,XLU,XLB,UNH,META,BTC-USD,ETH-USD"
     ).split(",")
     if s.strip()
 ]

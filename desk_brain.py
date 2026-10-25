@@ -90,11 +90,9 @@ def build_prompt(facts: dict[str, Any]) -> str:
 
 
 def _coerce_action(value: Any) -> str:
-    text = str(value or "").strip().lower()
-    for action in ACTIONS:
-        if action in text:
-            return action
-    return "skip"
+    # Exact match only: a substring test read "skip, not a buy" as a buy.
+    text = str(value or "").strip().strip(".!\"'").lower()
+    return text if text in ACTIONS else "skip"
 
 
 def _coerce_confidence(value: Any) -> float:
