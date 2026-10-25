@@ -46,7 +46,8 @@ def judged_calls(conn) -> list[tuple]:
     return conn.execute(
         "SELECT d.ts, d.symbol, c.venue, c.price, d.action FROM decisions d "
         "JOIN candidates c ON c.id = d.candidate_id "
-        "WHERE d.vetoed_by IN ('', 'judge') AND d.brain NOT IN ('', 'stub') AND c.price > 0"
+        "WHERE d.vetoed_by IN ('', 'judge') AND d.brain NOT IN ('', 'stub', 'cache')"
+        " AND c.price > 0"
     ).fetchall()
 
 

@@ -356,8 +356,10 @@ class DeskRunner:
         now = time.monotonic()
         hit = self._judge_cache.get(key)
         if hit and now - hit[0] < JUDGE_CACHE_SECONDS:
+            # brain="cache": the row is real, but it is not a fresh judge call,
+            # and the scorecard must not count one answer once a minute.
             return replace(hit[1], candidate_id=candidate_id,
-                           vetoed_by="", id=None)
+                           vetoed_by="", id=None, brain="cache")
         decision = judge(cand, facts, self.brain, candidate_id)
         self._judge_cache[key] = (now, decision)
         return decision
@@ -560,6 +562,7 @@ class DeskRunner:
             self._say(f"{venue}: record {record['win_rate']:.0%} win over "
                       f"{record['closed_trades']} closed; dial {dial.value:.2f}")
         budget = chief_budget(broker.equity(), broker.cash(), dial, len(open_now))
+        held_at_start = len(open_now)
 
         for cand in sorted(candidates, key=score_candidate, reverse=True):
             if self._cancelled() or self._halted.is_set():
@@ -572,7 +575,9 @@ class DeskRunner:
             gate = gate_candidate(
                 cand, bars_count=int(cand.raw.get("bars_count", 0) or 0),
                 already_held=cand.symbol in open_now,
-                slots=max(0, budget.slots - len(open_now)),
+                # budget.slots already excludes what was held at the start;
+                # only this cycle's buys come off it.
+                slots=max(0, budget.slots - (len(open_now) - held_at_start)),
             )
             if not gate.ok:
                 self._skip(cand, candidate_id, gate.reason, gate.check, result)

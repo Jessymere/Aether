@@ -783,3 +783,34 @@ def test_missing_history_fails_the_gate_closed(desk_env, stub_brain, monkeypatch
     r = runner(desk_env, stub_brain, monkeypatch)
     ok, reason = R.DeskRunner._walk_forward(r, Candidate(symbol="SPY", venue="stocks"), [])
     assert ok is False and "no daily history" in reason
+
+
+def test_a_cached_judge_answer_is_recorded_as_cache_not_a_new_call(
+        desk_env, stub_brain, monkeypatch, one_candidate):
+    monkeypatch.setitem(R.RULES, "always", desk_backtest.Rule(
+        rule_id="always", entry=lambda c, p: True, exit=lambda c, p: False, grid=[{}]))
+    r = runner(desk_env, stub_brain, monkeypatch)
+    r.run(cycles=1)
+    r.panic(flatten=True); r.resume()  # sell it so the next cycle judges again
+    r.run(cycles=1)
+    brains = [row["brain"] for row in connect(desk_env["db"]).execute(
+        "SELECT brain FROM decisions WHERE vetoed_by = '' ORDER BY id")]
+    assert brains[0] == "stub" and brains[-1] == "cache"
+
+
+def test_slots_held_at_the_start_are_not_subtracted_twice(desk_env, stub_brain, monkeypatch):
+    import desk_seats
+    monkeypatch.setattr(desk_seats, "DESK_MAX_POSITIONS", 3)
+    names = ["AAA", "BBB", "CCC"]
+    monkeypatch.setattr(R, "scan", lambda venue, limit, source=None: [
+        Candidate(symbol=s, venue="stocks", source="yahoo", price=10.0, raw={"bars_count": 400})
+        for s in names])
+    monkeypatch.setattr(R, "bars_for", lambda c, source=None: [])
+    pass_gate(monkeypatch)
+    r = runner(desk_env, stub_brain, monkeypatch)
+    names[:] = ["AAA", "BBB"]
+    r.run(cycles=1)                       # hold 2 of 3
+    names[:] = ["CCC"]
+    r.run(cycles=1)                       # 1 slot left: the old code saw 3-2-2 = 0
+    held = {p.symbol for p in open_positions(connect(desk_env["db"]))}
+    assert held == {"AAA", "BBB", "CCC"}
