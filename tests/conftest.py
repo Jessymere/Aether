@@ -165,6 +165,8 @@ def desk_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
     monkeypatch.setattr(desk_runner, "DESK_KILL_FILE", paths["kill"])
     monkeypatch.setattr(desk_runner, "DESK_DIAL_FILE", paths["dial"])
     monkeypatch.setattr(desk_runner, "DESK_LOGS", paths["logs"])
+    # A local .env may turn the core on; tests that want it set core_pct.
+    monkeypatch.setattr(desk_runner, "DESK_CORE_PCT", 0.0)
 
     def fake_connect(path=None):
         from desk_ledger import connect

@@ -29,6 +29,8 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Optional
 
 from config import (
+    DESK_CORE_PCT,
+    DESK_CORE_SYMBOL,
     DESK_DIAL_FILE,
     DESK_EXECUTION_MODE,
     DESK_KILL_FILE,
@@ -47,6 +49,7 @@ from desk_broker import Order, PaperBroker, make_broker
 from desk_data import Candidate, DataUnavailable
 from desk_ledger import (
     Decision,
+    Position,
     closed_trades,
     connect,
     delete_position,
@@ -131,6 +134,16 @@ def _row(position, mark: Optional[float] = None) -> dict:
     return row
 
 
+def reconcile(ledger: dict[str, float], broker: dict[str, float]) -> list[str]:
+    """Differences between the ledger's and the broker's ``symbol -> qty``."""
+    problems = []
+    for symbol in sorted(set(ledger) | set(broker)):
+        want, have = ledger.get(symbol, 0.0), broker.get(symbol, 0.0)
+        if abs(want - have) > 1e-6 * max(1.0, abs(want)):
+            problems.append(f"{symbol}: ledger {want:g}, broker {have:g}")
+    return problems
+
+
 @dataclass
 class DeskResult:
     """What the front ends render. Mirrors OrchestrationResult's role."""
@@ -177,6 +190,7 @@ class DeskRunner:
         self.cancel_cb = cancel_cb
         self.scan_limit = scan_limit
         self.starting_cash = starting_cash
+        self.core_symbol, self.core_pct = DESK_CORE_SYMBOL, DESK_CORE_PCT
 
         self.conn = connect()
         self._brokers: dict[str, Any] = {}
@@ -285,8 +299,13 @@ class DeskRunner:
         return DESK_KILL_FILE.is_file()
 
     # -- the kill switch ----------------------------------------------------
-    def panic(self, flatten: bool = True, reason: str = "manual panic") -> str:
-        """Trip the switch. Flattens every paper position at the last price."""
+    def panic(self, flatten: bool = True, reason: str = "manual panic",
+              keep_core: bool = False) -> str:
+        """Trip the switch. Flattens every position at the last price.
+
+        The kill switch passes ``keep_core``: it judges the sleeve, so it
+        sells only the sleeve. A manual PANIC sells everything.
+        """
         self._halted.set()
         try:
             DESK_KILL_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -298,6 +317,8 @@ class DeskRunner:
             for venue in self.venues:
                 broker = self._broker(venue)
                 for position in list(broker.positions()):
+                    if keep_core and self._is_core(position.symbol, venue):
+                        continue
                     price = self._mark(position.symbol, position.avg_price, venue)
                     fill = broker.submit(Order(symbol=position.symbol, side="sell",
                                                qty=position.qty, price=price,
@@ -500,8 +521,70 @@ class DeskRunner:
         return passed, reason
 
     # -- one cycle ----------------------------------------------------------
+    def _reconcile(self, venue: str, broker) -> None:
+        """Warn when a real broker's book and the ledger disagree.
+
+        Only warns: the broker is the truth about what is held, the ledger
+        the truth about why, and guessing which side is wrong could sell
+        something the user bought by hand.
+        """
+        if isinstance(broker, PaperBroker):
+            return  # hydrated from the ledger, so it agrees by construction
+        try:
+            held = {p.symbol: p.qty for p in broker.positions()}
+        except Exception as exc:  # noqa: BLE001 - a read failure must not abort the cycle
+            self._say(f"{venue}: could not read broker positions ({exc})", "warn")
+            return
+        problems = reconcile({p.symbol: p.qty for p in open_positions(self.conn, broker.mode)}, held)
+        if problems:
+            text = "; ".join(problems)
+            self._say(f"{venue}: ledger and {broker.name} disagree — {text}", "warn")
+            notify(f"Aether desk [{broker.mode.upper()}] — book mismatch", text)
+
+    # -- core + satellite ---------------------------------------------------
+    def _is_core(self, symbol: str, venue: str) -> bool:
+        return self.core_pct > 0 and venue == "stocks" and symbol == self.core_symbol
+
+    def _core_value(self, venues: Optional[list[str]] = None) -> float:
+        return sum(p.qty * self._marks.get(p.symbol, p.avg_price)
+                   for v in venues or self.venues for p in self._broker(v).positions()
+                   if self._is_core(p.symbol, v))
+
+    def _buy_core(self, venue: str, broker, result: DeskResult) -> None:
+        """Buy the core once, at core_pct of the venue, and then leave it alone.
+
+        shortcut: never rebalanced — a top-up moves sleeve cash into the core
+        and reads as a sleeve loss to the kill switch. Add a separate core
+        ledger if drift ever matters.
+        """
+        if not self._is_core(self.core_symbol, venue) or any(
+                p.symbol == self.core_symbol for p in broker.positions()):
+            return
+        price = self._mark(self.core_symbol, None, venue)
+        if price is None:
+            self._say(f"{venue}: no price for core {self.core_symbol} — not bought", "warn")
+            return
+        qty = int(self._equity([venue])[0] * self.core_pct / 100 / price)
+        if qty <= 0:
+            return
+        fill = broker.submit(Order(symbol=self.core_symbol, side="buy", qty=qty, price=price,
+                                   venue=venue, mode=broker.mode))
+        if not fill:
+            self._say(f"{venue}: core {self.core_symbol} not bought — "
+                      f"{getattr(broker, 'last_error', '') or 'broker refused'}", "warn")
+            return
+        record_fill(self.conn, fill)
+        upsert_position(self.conn, Position(symbol=fill.symbol, qty=fill.qty, avg_price=fill.price,
+                                            venue=venue, mode=broker.mode, rule_id="core"))
+        self._marks[self.core_symbol] = fill.price
+        result.filled += 1
+        self._say(f"{venue}: bought core {fill.qty:g} {fill.symbol} @ {fill.price:g} "
+                  f"({self.core_pct:g}% held, not traded)")
+
     def _cycle(self, venue: str, result: DeskResult) -> None:
         broker = self._broker(venue)
+        self._reconcile(venue, broker)
+        self._buy_core(venue, broker, result)
 
         # 1. exits first, so cash and slots free up for this cycle. The stops
         # live in the ledger, not in the broker: a live broker reports what the
@@ -509,6 +592,8 @@ class DeskRunner:
         stops = {p.symbol: (p.stop, p.take, p.atr_pct, p.rule_id, p.params)
                  for p in open_positions(self.conn, broker.mode)}
         for position in list(broker.positions()):
+            if self._is_core(position.symbol, venue):
+                continue
             (position.stop, position.take, position.atr_pct,
              position.rule_id, position.params) = stops.get(
                 position.symbol,
@@ -556,11 +641,11 @@ class DeskRunner:
         # 2. scan
         if self.status_cb:
             self.status_cb(f"desk: scanning {venue}…")
-        candidates = scan(venue, self.scan_limit)
+        candidates = [c for c in scan(venue, self.scan_limit) if not self._is_core(c.symbol, venue)]
         result.scanned += len(candidates)
         self._say(f"{venue}: {len(candidates)} candidate(s)")
 
-        open_now = {p.symbol for p in broker.positions()}
+        open_now = {p.symbol for p in broker.positions() if not self._is_core(p.symbol, venue)}
         # The record can only ever cut the dial, never raise it. A cold patch is
         # handled by arithmetic; the market still sets the ceiling.
         record = self._record(venue)
@@ -578,7 +663,8 @@ class DeskRunner:
         if record["closed_trades"] >= DESK_RECORD_MIN_TRADES:
             self._say(f"{venue}: record {record['win_rate']:.0%} win over "
                       f"{record['closed_trades']} closed; dial {dial.value:.2f}")
-        budget = chief_budget(self._equity([venue])[0], broker.cash(), dial, len(open_now))
+        budget = chief_budget(self._equity([venue])[0] - self._core_value([venue]),
+                              broker.cash(), dial, len(open_now))
         held_at_start = len(open_now)
 
         for cand in sorted(candidates, key=score_candidate, reverse=True):
@@ -758,10 +844,17 @@ class DeskRunner:
             result.equity = equity
             modes = {self._broker(v).mode for v in self.venues}
             mode = modes.pop() if len(modes) == 1 else "mixed"
+            # With a core, the limits watch the traded sleeve only (its own
+            # series): an 80% index holding trips them in an ordinary dip.
+            core = self._core_value()
+            watched, series = (equity - core, f"{mode}-sleeve") if core else (equity, mode)
             day_pnl_pct, drawdown, losing_days = risk_inputs(
-                equity_history(self.conn, mode), equity, now()[:10])
+                equity_history(self.conn, series), watched, now()[:10])
             record_equity(self.conn, equity, cash, positions_value=equity - cash,
                           drawdown=drawdown, day_pnl=day_pnl_pct, mode=mode)
+            if core:
+                record_equity(self.conn, watched, cash, positions_value=watched - cash,
+                              drawdown=drawdown, day_pnl=day_pnl_pct, mode=series)
 
             kill = risk_check(day_pnl_pct=day_pnl_pct, drawdown_pct=drawdown,
                               losing_days=losing_days)
@@ -770,14 +863,14 @@ class DeskRunner:
                 self._say(f"KILL SWITCH: {kill.reason}", "warn")
                 notify(f"Aether desk [{mode.upper()}] — KILL SWITCH",
                        f"{kill.reason}. Flattening all positions; the desk is halted.")
-                self.panic(flatten=True, reason=kill.reason)
+                self.panic(flatten=True, reason=kill.reason, keep_core=True)
                 break
 
         result.positions = [_row(p, self._marks.get(p.symbol))
                             for venue in self.venues
                             for p in self._broker(venue).positions()]
         for venue in self.venues:
-            self._broker(venue).starting_cash  # touch, keeps venues materialised
+            self._broker(venue)  # touch, keeps venues materialised
         # The effective dial, not the market dial: the UI shows what actually
         # sized the trades, so a record cut cannot hide behind a healthy number.
         dials = [adapt_dial(self._dial(v), self._records.get(v, {}),

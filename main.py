@@ -70,6 +70,13 @@ def main() -> None:
     if args.desk:
         print(orch.run_desk(cycles=args.cycles, venues=args.venue,
                             mode=args.desk_mode, scan_limit=args.desk_limit))
+        import datetime
+        if datetime.date.today().weekday() == 4:  # Friday: the week's report
+            try:
+                import desk_weekly
+                desk_weekly.run()
+            except Exception as exc:  # noqa: BLE001 - a report must not fail the run
+                print(f"weekly report failed: {exc}")
         return
 
     result = orch.run(request)

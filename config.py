@@ -324,6 +324,11 @@ DESK_SECTORS = {
     "BTC-USD": "crypto", "ETH-USD": "crypto",
 }
 DESK_MAX_PER_SECTOR = _env_int("DESK_MAX_PER_SECTOR", 2)
+#: Core + satellite: this % of the stock venue is bought once in
+#: DESK_CORE_SYMBOL and held; the desk trades the rest, and the kill switch
+#: watches only that rest. 0 turns it off. Nothing tested beat holding SPY.
+DESK_CORE_SYMBOL = _env_str("DESK_CORE_SYMBOL", "SPY")
+DESK_CORE_PCT = _env_float("DESK_CORE_PCT", 0.0)
 
 #: Anchored calendar split for the three verdicts. Bar history shorter than
 #: this falls back to a proportional split (see desk_backtest.proportional_split).
