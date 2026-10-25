@@ -55,6 +55,27 @@ _DESK_WORDS = re.compile(
     r"panic button|stock market|crypto market|dexscreener|gmgn)\b"
 )
 
+# Clear, high-level requests to change software should enter the build
+# pipeline even if the user does not mention "code" or "build".
+_BUILD_REQUEST = re.compile(
+    r"\b(improve|upgrade|enhance|fix|repair|debug|refactor|implement|"
+    r"create|make|build|write|add|change|modify|update)\b.*"
+    r"\b(ai|assistant|app|application|program|software|project|"
+    r"feature|function|code|bug|website|tool|agent)\b|"
+    r"\b(ai|assistant|app|application|program|software|project|"
+    r"feature|function|code|bug|website|tool|agent)\b.*"
+    r"\b(improve|upgrade|enhance|fix|repair|debug|refactor|implement|"
+    r"create|make|build|write|add|change|modify|update)\b"
+)
+
+# A direct request like "can you improve" is often a continuation of the
+# current project conversation. Treat it as a build request even when the user
+# has not repeated the project name; the planner can ask what to improve.
+_DIRECT_IMPROVEMENT_REQUEST = re.compile(
+    r"\b(?:can|could|would)\s+you\s+(?:please\s+)?"
+    r"(?:improve|upgrade|enhance|fix|repair|debug|refactor|update)\b"
+)
+
 
 def _cycles_from(request: str) -> int:
     """``"run 3 cycles"`` -> 3. Falls back to a single cycle."""
@@ -206,6 +227,12 @@ class Orchestrator:
         # Trading desk — before greetings so "hey, run the desk" still works.
         if _DESK_WORDS.search(lowered):
             return "desk"
+
+        # Obvious change requests should not depend on an extra classifier
+        # call (or be mistaken for casual chat).
+        if (_BUILD_REQUEST.search(lowered)
+                or _DIRECT_IMPROVEMENT_REQUEST.search(lowered)):
+            return "build"
 
         # Very short greetings — instant reply, no AI call needed.
         if len(lowered) < 40 and any(kw in lowered for kw in (

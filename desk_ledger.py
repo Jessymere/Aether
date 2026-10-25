@@ -146,7 +146,10 @@ def connect(path: Path | str = DESK_DB) -> sqlite3.Connection:
     path = Path(path)
     if path.parent and not path.parent.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path))
+    # The desktop creates the runner on the UI thread, runs trading cycles on a
+    # worker, and polls read-only snapshots from the UI. SQLite is compiled in
+    # serialized mode here (threadsafety == 3), so permit that shared handle.
+    conn = sqlite3.connect(str(path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
     _migrate(conn)

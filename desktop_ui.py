@@ -45,21 +45,22 @@ class ChatText(tk.Text):
         self.configure(
             state="disabled",
             wrap="word",
-            bg="#161616",
-            fg="#e0e0e0",
-            insertbackground="#007acc",
+            bg="#111827",
+            fg="#e5e7eb",
+            insertbackground="#38bdf8",
             borderwidth=0,
-            highlightthickness=0,
-            padx=10,
-            pady=10,
+            highlightthickness=1,
+            highlightbackground="#263449",
+            padx=16,
+            pady=14,
             font=("Segoe UI", 11),
         )
-        self.tag_configure("user", foreground="#4fc3f7", font=("Segoe UI", 11, "bold"))
-        self.tag_configure("aether", foreground="#00e676", font=("Segoe UI", 11))
-        self.tag_configure("system", foreground="#ffab40", font=("Segoe UI", 10, "italic"))
-        self.tag_configure("error", foreground="#ff5252", font=("Segoe UI", 10))
-        self.tag_configure("meta", foreground="#78909c", font=("Segoe UI", 9))
-        self.tag_configure("code", foreground="#ffd740", font=("Consolas", 10))
+        self.tag_configure("user", foreground="#7dd3fc", font=("Segoe UI", 11, "bold"))
+        self.tag_configure("aether", foreground="#6ee7b7", font=("Segoe UI", 11))
+        self.tag_configure("system", foreground="#fbbf24", font=("Segoe UI", 10, "italic"))
+        self.tag_configure("error", foreground="#f87171", font=("Segoe UI", 10))
+        self.tag_configure("meta", foreground="#94a3b8", font=("Segoe UI", 9))
+        self.tag_configure("code", foreground="#fde68a", font=("Consolas", 10))
         self.tag_config("user_linesep", spacing1=8, spacing3=4)
         self.tag_config("aether_linesep", spacing1=8, spacing3=4)
 
@@ -112,56 +113,78 @@ class BuilderApp:
     def _setup_styles(self) -> None:
         style = ttk.Style()
         style.theme_use("clam")
-        bg = "#161616"
-        panel = "#1e1e1e"
-        fg = "#e0e0e0"
-        accent = "#007acc"
-        success = "#00e676"
-        warn = "#ffab40"
-        error = "#ff5252"
+        bg = "#0b1120"
+        panel = "#111827"
+        fg = "#e5e7eb"
+        accent = "#0ea5e9"
 
-        style.configure(".", background=bg, foreground=fg, fieldbackground=panel, bordercolor="#3e3e3e")
+        style.configure(".", background=bg, foreground=fg, fieldbackground=panel,
+                        bordercolor="#263449", font=("Segoe UI", 10))
         style.configure("TFrame", background=bg)
         style.configure("TPanel.TFrame", background=panel)
+        style.configure("TCard.TFrame", background="#172235", relief="flat")
         style.configure("TLabel", background=bg, foreground=fg)
         style.configure("TPanel.TLabel", background=panel, foreground=fg)
-        style.configure("TLabelframe", background=panel, foreground=fg, bordercolor="#3e3e3e")
+        style.configure("TLabelframe", background=panel, foreground=fg, bordercolor="#263449")
         style.configure("TLabelframe.Label", background=panel, foreground=fg)
-        style.configure("TButton", background="#3e3e3e", foreground=fg, bordercolor="#3e3e3e")
-        style.map("TButton", background=[("active", "#4e4e4e"), ("pressed", "#5e5e5e")])
-        style.configure("Accent.TButton", background=accent, foreground="white")
-        style.map("Accent.TButton", background=[("active", "#148ed6"), ("pressed", "#0d6aa8")])
-        style.configure("Danger.TButton", background="#b71c1c", foreground="white",
-                        font=("Segoe UI", 10, "bold"))
-        style.map("Danger.TButton", background=[("active", "#d32f2f"), ("pressed", "#8e0000")])
+        style.configure("TButton", background="#263449", foreground=fg,
+                        bordercolor="#33465f", padding=(12, 7))
+        style.map("TButton", background=[("active", "#33465f"), ("pressed", "#1e293b")])
+        style.configure("Accent.TButton", background=accent, foreground="#f8fafc",
+                        bordercolor=accent, padding=(16, 8), font=("Segoe UI", 10, "bold"))
+        style.map("Accent.TButton", background=[("active", "#38bdf8"), ("pressed", "#0284c7")])
+        style.configure("Danger.TButton", background="#991b1b", foreground="#fff1f2",
+                        bordercolor="#b91c1c", padding=(14, 7), font=("Segoe UI", 10, "bold"))
+        style.map("Danger.TButton", background=[("active", "#dc2626"), ("pressed", "#7f1d1d")])
         style.configure("TRadiobutton", background=panel, foreground=fg)
         style.configure("TCheckbutton", background=panel, foreground=fg)
-        style.configure("TEntry", fieldbackground="#252525", foreground=fg, bordercolor="#3e3e3e")
-        style.configure("TSpinbox", fieldbackground="#252525", foreground=fg, bordercolor="#3e3e3e")
-        style.configure("TProgressbar", background=accent, troughcolor="#252525", bordercolor="#3e3e3e")
-        style.configure("Title.TLabel", font=("Segoe UI", 24, "bold"), foreground=accent)
-        style.configure("Subtitle.TLabel", foreground="#888888", font=("Segoe UI", 10))
+        style.configure("TEntry", fieldbackground="#0f172a", foreground=fg,
+                        bordercolor="#33465f", padding=(10, 9))
+        style.configure("TSpinbox", fieldbackground="#0f172a", foreground=fg,
+                        bordercolor="#33465f", padding=(5, 4))
+        style.configure("TProgressbar", background=accent, troughcolor="#172235",
+                        bordercolor="#263449")
+        style.configure("TNotebook", background=bg, borderwidth=0, tabmargins=(0, 0, 0, 0))
+        style.configure("TNotebook.Tab", background="#111827", foreground="#94a3b8",
+                        padding=(18, 10), borderwidth=0, font=("Segoe UI", 10, "bold"))
+        style.map("TNotebook.Tab", background=[("selected", "#172235"), ("active", "#1e293b")],
+                  foreground=[("selected", "#7dd3fc"), ("active", fg)])
+        style.configure("Treeview", background="#0f172a", fieldbackground="#0f172a",
+                        foreground=fg, rowheight=28, bordercolor="#263449")
+        style.configure("Treeview.Heading", background="#1e293b", foreground="#cbd5e1",
+                        font=("Segoe UI", 9, "bold"), padding=(8, 7), relief="flat")
+        style.map("Treeview", background=[("selected", "#164e63")],
+                  foreground=[("selected", "#f0f9ff")])
+        style.configure("Title.TLabel", font=("Segoe UI", 24, "bold"), foreground="#38bdf8")
+        style.configure("Subtitle.TLabel", foreground="#94a3b8", font=("Segoe UI", 10))
+        style.configure("MetricTitle.TLabel", background="#172235", foreground="#94a3b8",
+                        font=("Segoe UI", 9))
+        style.configure("MetricValue.TLabel", background="#172235", foreground=fg,
+                        font=("Segoe UI", 16, "bold"))
 
         self.root.configure(bg=bg)
 
     def _build_ui(self) -> None:
         # Header
-        header = ttk.Frame(self.root, padding=(20, 12, 20, 8))
+        header = ttk.Frame(self.root, padding=(24, 16, 24, 10))
         header.pack(fill="x")
         ttk.Label(header, text="Aether", style="Title.TLabel").pack(anchor="w")
         ttk.Label(header, text="Your local AI assistant — chat, build, automate", style="Subtitle.TLabel").pack(anchor="w", pady=(2, 0))
 
         # One window, two tabs: chat on the left of the notebook, desk behind it
         self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(fill="both", expand=True, padx=20, pady=(8, 0))
+        self.notebook.pack(fill="both", expand=True, padx=24, pady=(4, 0))
         chat_tab = ttk.Frame(self.notebook, style="TPanel.TFrame")
         self.notebook.add(chat_tab, text="  Chat  ")
 
         # Chat area
         chat_frame = ttk.Frame(chat_tab, style="TPanel.TFrame")
         chat_frame.pack(fill="both", expand=True)
-        self.chat = ChatText(chat_frame)
-        self.chat.pack(fill="both", expand=True)
+        chat_scroll = ttk.Scrollbar(chat_frame, orient="vertical")
+        self.chat = ChatText(chat_frame, yscrollcommand=chat_scroll.set)
+        chat_scroll.configure(command=self.chat.yview)
+        chat_scroll.pack(side="right", fill="y")
+        self.chat.pack(side="left", fill="both", expand=True)
 
         # Welcome message
         self.chat.append("Aether: Hello. I'm your local AI assistant. How can I help you today?", "aether", "aether_linesep")
@@ -174,51 +197,54 @@ class BuilderApp:
                 self.chat.append(f"Aether: {text}", "aether", "aether_linesep")
 
         # Input area
-        input_frame = ttk.Frame(chat_tab, style="TPanel.TFrame", padding=(0, 8, 0, 0))
+        input_frame = ttk.Frame(chat_tab, style="TPanel.TFrame", padding=(14, 10, 14, 12))
         input_frame.pack(fill="x")
 
         # Mode + controls row
         ctrl_row = ttk.Frame(input_frame, style="TPanel.TFrame")
-        ctrl_row.pack(fill="x", pady=(0, 8))
+        ctrl_row.pack(fill="x", pady=(0, 5))
 
-        ttk.Label(ctrl_row, text="Mode:", style="TPanel.TLabel").pack(side="left")
-        ttk.Label(ctrl_row, text="AI classifies intent automatically", style="TPanel.TLabel", foreground="#78909c").pack(side="left", padx=(8, 12))
-
-        ttk.Separator(ctrl_row, orient="vertical").pack(side="left", fill="y", padx=12)
+        ttk.Label(ctrl_row, text="MODE", style="TPanel.TLabel",
+                  foreground="#7dd3fc", font=("Segoe UI", 9, "bold")).pack(side="left")
+        ttk.Label(ctrl_row, text="Automatic intent", style="TPanel.TLabel",
+                  foreground="#94a3b8").pack(side="left", padx=(8, 14))
 
         self.fast_btn = ttk.Checkbutton(ctrl_row, text="Fast", variable=self.fast_var, style="TCheckbutton")
-        self.fast_btn.pack(side="left", padx=(0, 8))
+        self.fast_btn.pack(side="left", padx=(0, 12))
         self.auto_btn = ttk.Checkbutton(ctrl_row, text="Auto", variable=self.auto_var, style="TCheckbutton")
-        self.auto_btn.pack(side="left", padx=(0, 8))
-        ttk.Checkbutton(ctrl_row, text="Web", variable=self.web_var, style="TCheckbutton").pack(side="left", padx=(0, 8))
-        ttk.Checkbutton(ctrl_row, text="Auto web", variable=self.auto_web_var, style="TCheckbutton").pack(side="left", padx=(0, 8))
-        ttk.Label(ctrl_row, text="Rounds:", style="TPanel.TLabel").pack(side="left", padx=(8, 2))
-        ttk.Spinbox(ctrl_row, from_=0, to=2, width=3, textvariable=self.rounds_var).pack(side="left", padx=(0, 12))
+        self.auto_btn.pack(side="left", padx=(0, 12))
+        ttk.Checkbutton(ctrl_row, text="Web research", variable=self.web_var,
+                        style="TCheckbutton").pack(side="left", padx=(0, 12))
+        ttk.Checkbutton(ctrl_row, text="Auto web", variable=self.auto_web_var,
+                        style="TCheckbutton").pack(side="left", padx=(0, 12))
+        ttk.Label(ctrl_row, text="Review rounds", style="TPanel.TLabel",
+                  foreground="#94a3b8").pack(side="left", padx=(2, 6))
+        ttk.Spinbox(ctrl_row, from_=0, to=2, width=4,
+                    textvariable=self.rounds_var).pack(side="left")
 
-        ttk.Separator(ctrl_row, orient="vertical").pack(side="left", fill="y", padx=12)
-
-        self.voice_btn = ttk.Button(ctrl_row, text="Voice: Off", command=self.toggle_voice)
-        self.voice_btn.pack(side="left", padx=(0, 8))
-        ttk.Button(ctrl_row, text="Open Vault", command=self.open_vault).pack(side="left", padx=(0, 8))
-        ttk.Button(ctrl_row, text="Save to Vault", command=self.save_to_vault).pack(side="left", padx=(0, 8))
-        ttk.Button(ctrl_row, text="Clear Chat", command=self.clear_chat).pack(side="left", padx=(0, 8))
-        ttk.Button(ctrl_row, text="Check Ollama", command=self.check_ollama).pack(side="left", padx=(0, 8))
-        ttk.Button(ctrl_row, text="Check Updates", command=self.check_updates).pack(side="left", padx=(0, 8))
+        utility_row = ttk.Frame(input_frame, style="TPanel.TFrame")
+        utility_row.pack(fill="x", pady=(2, 8))
+        self.voice_btn = ttk.Button(utility_row, text="Voice off", command=self.toggle_voice)
+        self.voice_btn.pack(side="left", padx=(0, 7))
+        ttk.Button(utility_row, text="Open vault", command=self.open_vault).pack(side="left", padx=(0, 7))
+        ttk.Button(utility_row, text="Save to vault", command=self.save_to_vault).pack(side="left", padx=(0, 7))
+        ttk.Button(utility_row, text="Clear chat", command=self.clear_chat).pack(side="left", padx=(0, 7))
+        ttk.Button(utility_row, text="Check Ollama", command=self.check_ollama).pack(side="left", padx=(0, 7))
+        ttk.Button(utility_row, text="Check updates", command=self.check_updates).pack(side="left")
 
         # Text input
         self.input_var = tk.StringVar()
         self.input_entry = ttk.Entry(input_frame, textvariable=self.input_var, font=("Segoe UI", 11))
-        self.input_entry.pack(fill="x", pady=(0, 4))
+        self.input_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
         self.input_entry.bind("<Return>", lambda _e: self.start_run())
         self.input_entry.focus_set()
 
-        # Send + cancel row
-        btn_row = ttk.Frame(input_frame, style="TPanel.TFrame")
-        btn_row.pack(fill="x")
-        self.send_btn = ttk.Button(btn_row, text="Send", command=self.start_run, style="Accent.TButton")
-        self.send_btn.pack(side="left", padx=(0, 8))
-        self.cancel_btn = ttk.Button(btn_row, text="Cancel", command=self.cancel_run, state="disabled")
-        self.cancel_btn.pack(side="left")
+        self.send_btn = ttk.Button(input_frame, text="Send", command=self.start_run,
+                                   style="Accent.TButton")
+        self.send_btn.pack(side="right", padx=(8, 0))
+        self.cancel_btn = ttk.Button(input_frame, text="Cancel", command=self.cancel_run,
+                                     state="disabled")
+        self.cancel_btn.pack(side="right")
 
         # Desk tab
         desk_tab = ttk.Frame(self.notebook, style="TPanel.TFrame", padding=(0, 8, 0, 8))
@@ -268,9 +294,29 @@ class BuilderApp:
                                          style="TPanel.TLabel", foreground="#ffab40")
         self.desk_mode_label.pack(side="right")
 
-        self.desk_summary = ttk.Label(parent, text="Desk idle.", style="TPanel.TLabel",
-                                      foreground="#78909c")
-        self.desk_summary.pack(fill="x", pady=(8, 6))
+        self.desk_summary = ttk.Label(parent, text="DESK IDLE", style="TPanel.TLabel",
+                                      foreground="#9aa7b2", font=("Segoe UI", 10, "bold"))
+        self.desk_summary.pack(fill="x", pady=(10, 6))
+
+        metrics = ttk.Frame(parent, style="TPanel.TFrame")
+        metrics.pack(fill="x", pady=(0, 10))
+        self.desk_metrics = {}
+        for column, (key, title, initial, color) in enumerate((
+            ("equity", "EQUITY", "—", "#e0e0e0"),
+            ("pnl", "P&L", "—", "#e0e0e0"),
+            ("positions", "OPEN POSITIONS", "0", "#e0e0e0"),
+            ("dial", "RISK DIAL", "0.00", "#4fc3f7"),
+            ("record", "CLOSED RECORD", "No trades", "#e0e0e0"),
+        )):
+            metrics.columnconfigure(column, weight=1, uniform="desk_metric")
+            card = ttk.Frame(metrics, style="TCard.TFrame", padding=(12, 8))
+            card.grid(row=0, column=column, sticky="nsew",
+                      padx=(0 if column == 0 else 4, 0 if column == 4 else 4))
+            ttk.Label(card, text=title, style="MetricTitle.TLabel").pack(anchor="w")
+            value = ttk.Label(card, text=initial, style="MetricValue.TLabel",
+                              foreground=color)
+            value.pack(anchor="w", pady=(3, 0))
+            self.desk_metrics[key] = value
 
         # Anything that makes the desk look healthier than it is. Normally
         # empty, and packed away when it is.
@@ -278,29 +324,61 @@ class BuilderApp:
                                      foreground="#ffab40", wraplength=760,
                                      justify="left")
 
+        ttk.Label(parent, text="OPEN POSITIONS", style="TPanel.TLabel",
+                  font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(0, 4))
         table = ttk.Frame(parent, style="TPanel.TFrame")
         table.pack(fill="x")
         columns = ("symbol", "qty", "entry", "mark", "pnl", "stop", "take",
                    "venue", "mode")
-        self.desk_tree = ttk.Treeview(table, columns=columns, show="headings", height=6)
+        position_x = ttk.Scrollbar(table, orient="horizontal")
+        position_y = ttk.Scrollbar(table, orient="vertical")
+        self.desk_tree = ttk.Treeview(table, columns=columns, show="headings", height=4,
+                                      xscrollcommand=position_x.set,
+                                      yscrollcommand=position_y.set)
+        position_x.configure(command=self.desk_tree.xview)
+        position_y.configure(command=self.desk_tree.yview)
         for column in columns:
             self.desk_tree.heading(column, text=column.title())
-            self.desk_tree.column(column, width=76, anchor="w")
+            self.desk_tree.column(column, width=92, minwidth=64, anchor="w", stretch=False)
         self.desk_tree.column("symbol", width=130)
+        self.desk_tree.column("pnl", width=150)
+        self.desk_tree.column("venue", width=90)
+        self.desk_tree.column("mode", width=80)
         self.desk_tree.tag_configure("up", foreground="#4caf50")
         self.desk_tree.tag_configure("down", foreground="#ff5252")
-        self.desk_tree.pack(fill="x")
+        self.desk_tree.tag_configure("empty", foreground="#64748b")
+        self.desk_tree.grid(row=0, column=0, sticky="nsew")
+        position_y.configure(command=self.desk_tree.yview)
+        position_y.grid(row=0, column=1, sticky="ns")
+        position_x.configure(command=self.desk_tree.xview)
+        position_x.grid(row=1, column=0, sticky="ew")
+        table.columnconfigure(0, weight=1)
+
+        ttk.Label(parent, text="RECENT DECISIONS", style="TPanel.TLabel",
+                  font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(10, 4))
+        decisions_frame = ttk.Frame(parent, style="TPanel.TFrame")
+        decisions_frame.pack(fill="x")
+        decision_y = ttk.Scrollbar(decisions_frame, orient="vertical")
+        decision_x = ttk.Scrollbar(decisions_frame, orient="horizontal")
 
         self.desk_decisions = ttk.Treeview(
-            parent, columns=("symbol", "action", "conf", "vetoed", "why"),
-            show="headings", height=5)
-        for column, width in (("symbol", 130), ("action", 70), ("conf", 55),
-                              ("vetoed", 90), ("why", 0)):
+            decisions_frame, columns=("symbol", "action", "conf", "vetoed", "why"),
+            show="headings", height=3, xscrollcommand=decision_x.set,
+            yscrollcommand=decision_y.set)
+        decision_y.configure(command=self.desk_decisions.yview)
+        decision_x.configure(command=self.desk_decisions.xview)
+        for column, width in (("symbol", 130), ("action", 80), ("conf", 70),
+                              ("vetoed", 110), ("why", 380)):
             self.desk_decisions.heading(column, text=column.title())
-            self.desk_decisions.column(column, width=width, anchor="w")
+            self.desk_decisions.column(column, width=width, minwidth=width,
+                                       anchor="w", stretch=column == "why")
         self.desk_decisions.tag_configure("buy", foreground="#4caf50")
         self.desk_decisions.tag_configure("skip", foreground="#78909c")
-        self.desk_decisions.pack(fill="x", pady=(6, 0))
+        self.desk_decisions.tag_configure("empty", foreground="#64748b")
+        self.desk_decisions.grid(row=0, column=0, sticky="nsew")
+        decision_y.grid(row=0, column=1, sticky="ns")
+        decision_x.grid(row=1, column=0, sticky="ew")
+        decisions_frame.columnconfigure(0, weight=1)
 
         self.desk_log = ChatText(parent, height=10)
         self.desk_log.pack(fill="both", expand=True, pady=(8, 0))
@@ -421,21 +499,30 @@ class BuilderApp:
         else:
             heading = "idle"
         equity = snapshot.get("equity")
-        parts = [f"{heading}"]
-        if equity is not None:
-            parts.append(f"equity {equity:,.2f}")
+        self.desk_summary.configure(
+            text=f"DESK {heading.upper()}  ·  {label.upper()}",
+            foreground="#ff5252" if snapshot.get("halted") else
+            "#00e676" if self._desk_active else "#9aa7b2")
+        self.desk_metrics["equity"].configure(
+            text=f"${equity:,.2f}" if equity is not None else "—")
         pnl = snapshot.get("pnl")
-        if pnl is not None:
-            parts.append(f"P&L {pnl:+,.2f}")
-        parts.append(f"dial {snapshot.get('dial', 0.0):.2f}")
-        parts.append(f"filled {snapshot.get('filled', 0)}")
-        parts.append(f"skipped {snapshot.get('skips', 0)}")
+        self.desk_metrics["pnl"].configure(
+            text=f"${pnl:+,.2f}" if pnl is not None else "—",
+            foreground="#4caf50" if (pnl or 0) > 0 else
+            "#ff5252" if (pnl or 0) < 0 else "#e0e0e0")
+        self.desk_metrics["positions"].configure(
+            text=str(len(snapshot.get("positions", []))))
+        self.desk_metrics["dial"].configure(
+            text=f"{snapshot.get('dial', 0.0):.2f}")
         record = snapshot.get("record") or {}
         closed = sum(r.get("closed_trades", 0) for r in record.values())
         if closed:
-            wins = sum(r.get("win_rate") or 0.0 for r in record.values())
-            parts.append(f"record {wins / len(record):.0%} win / {closed} closed")
-        self.desk_summary.configure(text=" · ".join(parts))
+            wins = sum((r.get("win_rate") or 0.0) * r.get("closed_trades", 0)
+                       for r in record.values())
+            self.desk_metrics["record"].configure(
+                text=f"{wins / closed:.0%} · {closed} trades")
+        else:
+            self.desk_metrics["record"].configure(text="No trades")
 
         health = snapshot.get("health") or []
         if health:
@@ -446,8 +533,17 @@ class BuilderApp:
         elif self.desk_health.winfo_ismapped():
             self.desk_health.pack_forget()
 
+        positions = snapshot.get("positions", [])
         seen = set()
-        for position in snapshot.get("positions", []):
+        if not positions:
+            if not self.desk_tree.exists("__empty__"):
+                self.desk_tree.insert(
+                    "", "end", iid="__empty__",
+                    values=("No open positions", "", "", "", "", "", "", "", ""),
+                    tags=("empty",),
+                )
+            seen.add("__empty__")
+        for position in positions:
             symbol = position.get("symbol", "")
             seen.add(symbol)
             pnl = position.get("pnl")
@@ -468,7 +564,13 @@ class BuilderApp:
             self.desk_tree.delete(symbol)
 
         self.desk_decisions.delete(*self.desk_decisions.get_children())
-        for note in (snapshot.get("recent") or [])[:15]:
+        recent = (snapshot.get("recent") or [])[:15]
+        if not recent:
+            self.desk_decisions.insert(
+                "", "end", values=("No decisions yet", "", "", "", ""),
+                tags=("empty",),
+            )
+        for note in recent:
             self.desk_decisions.insert("", "end", values=(
                 note.get("symbol", ""), note.get("action", ""),
                 f"{note.get('confidence', 0):.2f}", note.get("vetoed_by", ""),

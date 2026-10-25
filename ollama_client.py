@@ -126,8 +126,12 @@ def _http_error_message(base_url: str, code: int, detail: str, openai: bool) -> 
     """Build an actionable error for a non-2xx response."""
     service = "The model provider" if openai else "Ollama"
     message = f"{service} returned HTTP {code} at {base_url}: {detail}"
-    if code == 401 and openai:
-        message += "  Hint: check the provider's API key in the project .env file."
+    if code in {401, 403} and openai:
+        message += (
+            "  Hint: the provider rejected this request. Verify the API key in "
+            "the project .env file is current and has access to this model. "
+            "A configured key can still be invalid or lack model permission."
+        )
     return message
 
 

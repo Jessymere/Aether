@@ -1,40 +1,39 @@
 import os
+import sys
 from pathlib import Path
 
 OLLAMA_URL = "http://127.0.0.1:11434"
 APP_NAME = "Aether"
-#: Every seat runs on a hosted free tier. Nothing here needs a local download.
-#: The reviewer sits on a *different* provider from the rest on purpose: one
-#: free tier answering 429 to a burst must not be able to stall the review loop.
+#: Every default seat uses OpenRouter's free-model router. It selects an
+#: available model per request and filters for capabilities such as vision.
 MODELS = {
-    "planner": "z-ai/glm-5.3",
-    "coder": "z-ai/glm-5.3",
-    "reviewer": "nvidia/nemotron-3-ultra-550b-a55b:free",
-    "tester": "openai/gpt-oss-20b",
-    "security": "nvidia/nemotron-3-super-120b-a12b",
-    "release": "openai/gpt-oss-20b",
-    "decider": "nvidia/nemotron-3.5-lightning-30b-a3b",
-    "deepseek_coder": "z-ai/glm-5.3",
-    "deepseek_coder_1017": "z-ai/glm-5.3",
-    "qwen_coder": "z-ai/glm-5.3",
-    "vision": "nvidia/nemotron-3.5-super-vl-120b-a12b",
-    "link": "liquid/lfm-2.5-2.6b:free",
+    "planner": "openrouter/free",
+    "coder": "openrouter/free",
+    "reviewer": "openrouter/free",
+    "tester": "openrouter/free",
+    "security": "openrouter/free",
+    "release": "openrouter/free",
+    "decider": "openrouter/free",
+    "deepseek_coder": "openrouter/free",
+    "deepseek_coder_1017": "openrouter/free",
+    "qwen_coder": "openrouter/free",
+    "vision": "openrouter/free",
+    "link": "openrouter/free",
 }
-#: ``--fast`` keeps the two seats whose judgement is load-bearing and swaps the
-#: rest for the lowest-latency model on the same provider.
+#: ``--fast`` stays on OpenRouter and uses the responsive MiniMax free route.
 FAST_MODELS = {
-    "planner": "nvidia/nemotron-3.5-lightning-30b-a3b",
-    "coder": "openai/gpt-oss-20b",
-    "reviewer": "cohere/north-mini-code:free",
-    "tester": "nvidia/nemotron-3.5-lightning-30b-a3b",
-    "security": "nvidia/nemotron-3.5-lightning-30b-a3b",
-    "release": "nvidia/nemotron-3.5-lightning-30b-a3b",
-    "deepseek_coder": "openai/gpt-oss-20b",
-    "deepseek_coder_1017": "openai/gpt-oss-20b",
-    "qwen_coder": "openai/gpt-oss-20b",
-    "decider": "google/gemma-4-31b-it",
-    "vision": "meta/llama-3.2-11b-vision-instruct",
-    "link": "nvidia/nemotron-3.5-lightning-30b-a3b",
+    "planner": "minimax/minimax-m3.1-flash:free",
+    "coder": "minimax/minimax-m3.1-flash:free",
+    "reviewer": "minimax/minimax-m3.1-flash:free",
+    "tester": "minimax/minimax-m3.1-flash:free",
+    "security": "minimax/minimax-m3.1-flash:free",
+    "release": "minimax/minimax-m3.1-flash:free",
+    "deepseek_coder": "minimax/minimax-m3.1-flash:free",
+    "deepseek_coder_1017": "minimax/minimax-m3.1-flash:free",
+    "qwen_coder": "minimax/minimax-m3.1-flash:free",
+    "decider": "minimax/minimax-m3.1-flash:free",
+    "vision": "minimax/minimax-m3.1-flash:free",
+    "link": "minimax/minimax-m3.1-flash:free",
 }
 ROOT = Path(__file__).parent
 
@@ -75,7 +74,16 @@ def _load_dotenv(path: Path, prefer_file: frozenset[str] = frozenset()) -> None:
             os.environ.setdefault(key, value)
 
 
-_load_dotenv(ROOT / ".env", _DOTENV_PREFERS_FILE)
+def _dotenv_path() -> Path:
+    """Find app credentials beside a frozen executable or in its source root."""
+    if getattr(sys, "frozen", False):
+        executable_dir = Path(sys.executable).resolve().parent
+        candidates = (executable_dir / ".env", executable_dir.parent.parent / ".env")
+        return next((path for path in candidates if path.is_file()), candidates[0])
+    return ROOT / ".env"
+
+
+_load_dotenv(_dotenv_path(), _DOTENV_PREFERS_FILE)
 
 MEMORY_FILE = ROOT / "memory.md"
 MEMORY_DB = ROOT / "memory.db"
@@ -158,6 +166,9 @@ MODEL_PROVIDERS: dict[str, str] = {
     "cohere/north-mini-code:free": "openrouter",
     "liquid/lfm-2.5-2.6b:free": "openrouter",
     "google/gemma-4-31b-it:free": "openrouter",
+    "minimax/minimax-m3.1-flash:free": "openrouter",
+    "nvidia/nemotron-3.5-super-vl:free": "openrouter",
+    "openrouter/free": "openrouter",
 }
 
 
@@ -224,10 +235,10 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-#: The seat that has an opinion. "socket" routes the typed decision to the
-#: Experiential Labs decisions endpoint; "ollama" keeps it fully local.
-DESK_BRAIN = _env_str("DESK_BRAIN", "socket").strip().lower()
-DESK_BRAIN_MODEL = _env_str("DESK_BRAIN_MODEL", DECISION_MODEL)
+#: The trading judge uses OpenRouter by default. "socket" remains an explicit
+#: legacy option; "ollama" selects the configured chat-model path.
+DESK_BRAIN = _env_str("DESK_BRAIN", "openrouter").strip().lower()
+DESK_BRAIN_MODEL = _env_str("DESK_BRAIN_MODEL", MODELS["decider"])
 DESK_BRAIN_FALLBACK_MODEL = _env_str("DESK_BRAIN_FALLBACK_MODEL", "qwen3.5:4b")
 
 #: "paper" is the default and is never inferred from whether a key is present.

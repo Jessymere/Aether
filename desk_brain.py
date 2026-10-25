@@ -9,12 +9,12 @@ Confidence is asked as a *choice* (low/medium/high) rather than a float,
 because the model is bad at arithmetic and good at picking. The bucket is
 mapped to a number in code, which is the whole point.
 
-Two backends, one interface:
+Backends share one interface:
 
-  * ``SocketBrain`` — the typed decisions endpoint (``decision_client``).
-    This is the article's "System One" socket, already built and already
-    authenticated with the gateway key.
-  * ``OllamaBrain``  — the same question to a local model, fully offline.
+  * ``OpenRouterBrain`` — a chat decision routed through ``config.model_route``.
+  * ``OllamaBrain`` — explicitly selected local-model compatibility path.
+  * ``SocketBrain`` — legacy typed decisions endpoint, available by explicit
+    configuration but no longer the default.
 
 Selection goes through :func:`make_brain`. Which surface a model lives on is
 decided by ``config.model_route``, never by whether a key happens to be set.
@@ -79,7 +79,12 @@ def build_prompt(facts: dict[str, Any]) -> str:
         "floors and ceilings are enforced elsewhere, so do not recompute them.\n\n"
         "Candidate facts:\n"
         + "\n".join(lines) + record
-        + "\n\nAnswer buy, hold or skip, with your confidence. Buy means open a "
+        + "\n\nThe return_5bar_pct, return_20bar_pct and return_60bar_pct "
+        "fields are historical returns, not forecasts. Use "
+        "multi_horizon_alignment to notice disagreement across timeframes; "
+        "higher volatility, a weak volume ratio or a deep drawdown are risk "
+        "evidence, not reasons to invent missing facts.\n\n"
+        "Answer buy, hold or skip, with your confidence. Buy means open a "
         "position now; hold means the setup is good but not yet; skip means pass."
     )
 
@@ -161,7 +166,7 @@ class SocketBrain:
 
 
 class OllamaBrain:
-    """The same question, asked of a local model. Fully offline."""
+    """Ask a configured chat model; the route may be local or hosted."""
 
     name = "ollama"
 
@@ -205,6 +210,15 @@ class OllamaBrain:
         )
 
 
+class OpenRouterBrain(OllamaBrain):
+    """Trading-desk decision seat using the configured OpenRouter model."""
+
+    name = "openrouter"
+
+    def __init__(self, model: str = DESK_BRAIN_MODEL) -> None:
+        super().__init__(model)
+
+
 class StubBrain:
     """Deterministic brain for tests and for ``--offline`` runs."""
 
@@ -225,6 +239,8 @@ class StubBrain:
 def make_brain(name: Optional[str] = None) -> Brain:
     """Resolve a brain by name, degrading sensibly when a route is unusable."""
     chosen = (name or DESK_BRAIN or "socket").strip().lower()
+    if chosen == "openrouter":
+        return OpenRouterBrain()
     if chosen == "ollama":
         return OllamaBrain()
     if chosen == "stub":

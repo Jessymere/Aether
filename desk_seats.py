@@ -362,6 +362,61 @@ def risk_check(*, day_pnl_pct: float, drawdown_pct: float,
 
 
 # ---------------------------------------------------------------------------
+# TECHNICAL ANALYST — multi-horizon evidence from candles, no model opinions
+# ---------------------------------------------------------------------------
+def candle_evidence(bars: list[Bar]) -> dict[str, Any]:
+    """Summarize candle momentum, volatility and volume for the judge.
+
+    This borrows the specialized OHLCV lens from market forecasting models
+    without making an unvalidated price prediction. Every statistic uses only
+    bars already observed; the result is evidence, never a trade instruction.
+    """
+    closes = [bar.close for bar in bars if bar.close > 0]
+
+    def return_pct(period: int) -> float:
+        if len(closes) <= period:
+            return 0.0
+        return (closes[-1] / closes[-period - 1] - 1.0) * 100.0
+
+    returns = [new / old - 1.0 for old, new in zip(closes, closes[1:]) if old > 0]
+    recent_returns = returns[-20:]
+    daily_vol = (
+        (sum((value - sum(recent_returns) / len(recent_returns)) ** 2
+             for value in recent_returns) / len(recent_returns)) ** 0.5 * 100.0
+        if recent_returns else 0.0
+    )
+    volumes = [bar.volume for bar in bars[-20:] if bar.volume > 0]
+    recent_volume = [bar.volume for bar in bars[-5:] if bar.volume > 0]
+    volume_ratio = (
+        (sum(recent_volume) / len(recent_volume)) /
+        (sum(volumes) / len(volumes))
+        if volumes and recent_volume else 0.0
+    )
+    drawdown = (
+        (closes[-1] / max(closes[-60:]) - 1.0) * 100.0
+        if closes else 0.0
+    )
+    horizons = [return_pct(period) for period in (5, 20, 60)]
+    if len(closes) < 61:
+        alignment = "insufficient_history"
+    else:
+        positive = sum(value > 0 for value in horizons)
+        negative = sum(value < 0 for value in horizons)
+        alignment = "bullish" if positive == 3 else (
+            "bearish" if negative == 3 else "mixed"
+        )
+    return {
+        "return_5bar_pct": round(horizons[0], 2),
+        "return_20bar_pct": round(horizons[1], 2),
+        "return_60bar_pct": round(horizons[2], 2),
+        "20bar_realized_volatility_pct": round(daily_vol, 2),
+        "volume_5bar_vs_20bar_ratio": round(volume_ratio, 2),
+        "drawdown_from_60bar_high_pct": round(drawdown, 2),
+        "multi_horizon_alignment": alignment,
+    }
+
+
+# ---------------------------------------------------------------------------
 # JUDGE — the one opinion. Given facts, not raw data.
 # ---------------------------------------------------------------------------
 def judge_evidence(cand: Candidate, bars: list[Bar], dial: Dial, *,
@@ -399,6 +454,7 @@ def judge_evidence(cand: Candidate, bars: list[Bar], dial: Dial, *,
         "daily_range_pct": round(range_pct * 100, 2),
         "stop_distance_pct": round(range_pct * 200, 2),
     }
+    facts.update(candle_evidence(bars))
     if record:
         facts["record_closed_trades"] = record.get("closed_trades", 0)
         facts["record_win_rate"] = record.get("win_rate")

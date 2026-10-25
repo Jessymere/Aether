@@ -179,7 +179,7 @@ def test_a_401_names_the_missing_key_file(monkeypatch) -> None:
     error.read = lambda: b'{"detail":"bad key"}'  # type: ignore[method-assign]
     capture(monkeypatch, error=error)
 
-    with pytest.raises(RuntimeError, match="check the provider's API key"):
+    with pytest.raises(RuntimeError, match=r"Verify the API key in the project \.env file"):
         chat("https://integrate.api.nvidia.com", "m", [{"role": "user", "content": "hi"}],
              api_key="k", surface="nim")
 

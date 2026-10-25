@@ -48,6 +48,24 @@ class TestClassifyIntent:
         orch = Orchestrator()
         assert orch.classify_intent("   ") == "chat"
 
+    @pytest.mark.parametrize("text", [
+        "improve my AI",
+        "fix my app",
+        "add memory to the assistant",
+        "please update the project",
+    ])
+    def test_clear_software_changes_route_to_build_without_classifier(self, text, monkeypatch) -> None:
+        """Direct change requests should enter the build pipeline deterministically."""
+        def unexpected_model_call(*args, **kwargs):
+            raise AssertionError("clear software changes should not need classification")
+
+        monkeypatch.setattr("orchestrator.ask", unexpected_model_call)
+        assert Orchestrator().classify_intent(text) == "build"
+
+    def test_capability_question_still_routes_to_chat(self) -> None:
+        """A general question about Aether must not be mistaken for a change request."""
+        assert Orchestrator().classify_intent("what can you do?") == "chat"
+
 
 class TestOrchestratorInit:
     """Tests for Orchestrator initialization."""

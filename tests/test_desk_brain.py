@@ -76,7 +76,9 @@ def test_socket_is_used_when_the_key_is_present(monkeypatch):
 
 def test_make_brain_never_raises_on_junk():
     assert isinstance(DB.make_brain("nonsense"), DB.SocketBrain)
-    assert isinstance(DB.make_brain(None), (DB.SocketBrain, DB.OllamaBrain, DB.StubBrain))
+    assert isinstance(DB.make_brain(None), (
+        DB.OpenRouterBrain, DB.SocketBrain, DB.OllamaBrain, DB.StubBrain,
+    ))
 
 
 # ---------------------------------------------------------------------------
