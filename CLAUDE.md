@@ -14,7 +14,7 @@ All from the repo root.
 
 ```powershell
 python main.py "<request>"            # CLI: chat, Q&A, system control, or build
-python desktop_ui.py                  # Tkinter app — this is what ships as Aether.exe
+python desktop_ui.py                  # CustomTkinter app — this is what ships as Aether.exe
 python web_ui.py                      # browser UI on 127.0.0.1:8765
 python self_improve.py --rounds 1     # builder improves itself (approval required)
 
@@ -31,7 +31,7 @@ CLI flags: `--auto-approve`, `--fast` (4B everywhere except coder/reviewer), `--
 
 ## Architecture
 
-**One pipeline, three front ends.** `orchestrator.py` holds the class `Orchestrator` and the dataclass `OrchestrationResult`. `main.py` (CLI), `desktop_ui.py` (Tkinter/exe), and `web_ui.py` (browser) all drive `Orchestrator.run()` and then `apply_proposal()` — including the web UI's `/approve` handler, so approval on every surface gets the rollback backup, the containment check, and the CHANGELOG note. A pipeline change belongs in `orchestrator.py` alone.
+**One pipeline, three front ends.** `orchestrator.py` holds the class `Orchestrator` and the dataclass `OrchestrationResult`. `main.py` (CLI), `desktop_ui.py` (CustomTkinter/exe), and `web_ui.py` (browser) all drive `Orchestrator.run()` and then `apply_proposal()` — including the web UI's `/approve` handler, so approval on every surface gets the rollback backup, the containment check, and the CHANGELOG note. A pipeline change belongs in `orchestrator.py` alone.
 
 **Failures keep their stack.** `run()` catches everything into `result.error`; it also stores `result.traceback` and prints it, because otherwise a one-line bug in a stage is indistinguishable from an agent failing.
 
@@ -93,4 +93,5 @@ The desk keeps its own append-only ledger in `desk.db` (`candidates`, `decisions
 - `mcp_servers.json` gates write-capable MCP tools behind `--approve`; `git_project` is disabled despite the outer repo existing.
 - `config.VERSION` is `1.0.0` and `UPDATE_MANIFEST_URL` is still the placeholder `your-server.com`.
 - `training/` is deliberately isolated (unsloth/torch via its own `training/.venv`) — never install those into the builder runtime.
+- `desktop_ui.py` is CustomTkinter (DPI-aware) with ttk `Treeview` tables themed to match. Its `Label` subclass maps the handlers' `foreground=` to `text_color=`, and `Progress` maps `start(speed)`; check visibility with `winfo_manager()`, not `winfo_ismapped()`, which is false for anything on a hidden tab. Exceptions captured into a `root.after` lambda must be bound as a default (`lambda error=str(exc): ...`) — the `except` name is deleted before the callback runs. The build bundles CustomTkinter's themes via `--collect-data customtkinter`.
 - `build_aether.ps1` bundles `vault/`, `memory.md`, `memory.db`, `mcp_servers.json` as data files; add new data files to both its `--add-data` list and `Aether.spec`.

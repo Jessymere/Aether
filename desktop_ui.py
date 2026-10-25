@@ -18,11 +18,12 @@ import webbrowser
 from datetime import datetime
 from pathlib import Path
 import tkinter as tk
+import customtkinter as ctk
 from tkinter import filedialog, messagebox, ttk
 
 from orchestrator import Orchestrator, CancelledError
 from agents import tester
-from config import (DESK_CYCLE_SECONDS, DESK_EXECUTION_MODE, MEMORY_FILE, MODELS,
+from config import (DESK_CYCLE_SECONDS, DESK_EXECUTION_MODE, MEMORY_FILE,
                     RUNS, WORKSPACE, VERSION)
 from update import check_for_updates
 from web_research import needs_web, research
@@ -78,17 +79,56 @@ class ChatText(tk.Text):
         self.configure(state="disabled")
 
 
+#: Palette. One place, so the cards, tables and text agree.
+BG, CARD, CARD_2, LINE = "#0b1120", "#111827", "#172235", "#263449"
+TEXT, MUTED, ACCENT = "#e5e7eb", "#94a3b8", "#0ea5e9"
+GREEN, RED, AMBER = "#22c55e", "#ef4444", "#f59e0b"
+
+
+class Label(ctk.CTkLabel):
+    """CTkLabel that also takes ``foreground=``, which the handlers below use."""
+
+    def configure(self, require_redraw=False, **kwargs):
+        if "foreground" in kwargs:
+            kwargs["text_color"] = kwargs.pop("foreground")
+        super().configure(require_redraw, **kwargs)
+
+
+class Progress(ctk.CTkProgressBar):
+    """Indeterminate bar whose ``start(speed)`` matches the old ttk calls."""
+
+    def start(self, *_speed):
+        self.configure(mode="indeterminate")
+        super().start()
+
+    def stop(self):
+        super().stop()
+        self.configure(mode="determinate")  # an idle indeterminate bar still draws
+        self.set(0)
+
+
+def card(parent, **kw) -> ctk.CTkFrame:
+    return ctk.CTkFrame(parent, fg_color=CARD_2, corner_radius=12, **kw)
+
+
+def heading(parent, text: str) -> Label:
+    return Label(parent, text=text, text_color=MUTED, font=("Segoe UI", 11, "bold"), anchor="w")
+
+
 class BuilderApp:
-    def __init__(self, root: tk.Tk):
+    def __init__(self, root):
         self.root = root
         self.root.title(f"Aether v{VERSION}")
-        self.root.geometry("1200x800")
-        self.root.minsize(900, 600)
+        # Fit the screen: the desk tab is tall, and a clipped window hid the footer.
+        width = min(1280, self.root.winfo_screenwidth() - 60)
+        height = min(900, self.root.winfo_screenheight() - 90)
+        self.root.geometry(f"{width}x{height}+20+10")
+        self.root.minsize(1000, 680)
         self.project_root = WORKSPACE
         self.media_path = None
         self.fast_var = tk.BooleanVar(value=False)
         self.auto_var = tk.BooleanVar(value=False)  # Auto-approve / Claude mode
-        self.rounds_var = tk.IntVar(value=1)
+        self.rounds_var = tk.StringVar(value="1")
         self.web_var = tk.BooleanVar(value=False)
         self.auto_web_var = tk.BooleanVar(value=True)
         self.mode_var = tk.StringVar(value="chat")  # chat | build | qa
@@ -111,311 +151,276 @@ class BuilderApp:
 
     # ------------------------------------------------------------------ UI
     def _setup_styles(self) -> None:
+        # CustomTkinter draws everything but tables; the ttk Treeview is themed
+        # to match the cards.
         style = ttk.Style()
         style.theme_use("clam")
-        bg = "#0b1120"
-        panel = "#111827"
-        fg = "#e5e7eb"
-        accent = "#0ea5e9"
-
-        style.configure(".", background=bg, foreground=fg, fieldbackground=panel,
-                        bordercolor="#263449", font=("Segoe UI", 10))
-        style.configure("TFrame", background=bg)
-        style.configure("TPanel.TFrame", background=panel)
-        style.configure("TCard.TFrame", background="#172235", relief="flat")
-        style.configure("TLabel", background=bg, foreground=fg)
-        style.configure("TPanel.TLabel", background=panel, foreground=fg)
-        style.configure("TLabelframe", background=panel, foreground=fg, bordercolor="#263449")
-        style.configure("TLabelframe.Label", background=panel, foreground=fg)
-        style.configure("TButton", background="#263449", foreground=fg,
-                        bordercolor="#33465f", padding=(12, 7))
-        style.map("TButton", background=[("active", "#33465f"), ("pressed", "#1e293b")])
-        style.configure("Accent.TButton", background=accent, foreground="#f8fafc",
-                        bordercolor=accent, padding=(16, 8), font=("Segoe UI", 10, "bold"))
-        style.map("Accent.TButton", background=[("active", "#38bdf8"), ("pressed", "#0284c7")])
-        style.configure("Danger.TButton", background="#991b1b", foreground="#fff1f2",
-                        bordercolor="#b91c1c", padding=(14, 7), font=("Segoe UI", 10, "bold"))
-        style.map("Danger.TButton", background=[("active", "#dc2626"), ("pressed", "#7f1d1d")])
-        style.configure("TRadiobutton", background=panel, foreground=fg)
-        style.configure("TCheckbutton", background=panel, foreground=fg)
-        style.configure("TEntry", fieldbackground="#0f172a", foreground=fg,
-                        bordercolor="#33465f", padding=(10, 9))
-        style.configure("TSpinbox", fieldbackground="#0f172a", foreground=fg,
-                        bordercolor="#33465f", padding=(5, 4))
-        style.configure("TProgressbar", background=accent, troughcolor="#172235",
-                        bordercolor="#263449")
-        style.configure("TNotebook", background=bg, borderwidth=0, tabmargins=(0, 0, 0, 0))
-        style.configure("TNotebook.Tab", background="#111827", foreground="#94a3b8",
-                        padding=(18, 10), borderwidth=0, font=("Segoe UI", 10, "bold"))
-        style.map("TNotebook.Tab", background=[("selected", "#172235"), ("active", "#1e293b")],
-                  foreground=[("selected", "#7dd3fc"), ("active", fg)])
-        style.configure("Treeview", background="#0f172a", fieldbackground="#0f172a",
-                        foreground=fg, rowheight=28, bordercolor="#263449")
-        style.configure("Treeview.Heading", background="#1e293b", foreground="#cbd5e1",
-                        font=("Segoe UI", 9, "bold"), padding=(8, 7), relief="flat")
+        style.configure("Treeview", background=CARD, fieldbackground=CARD, foreground=TEXT,
+                        rowheight=30, borderwidth=0, font=("Segoe UI", 10))
+        style.configure("Treeview.Heading", background=CARD_2, foreground="#cbd5e1",
+                        font=("Segoe UI", 9, "bold"), padding=(8, 6), relief="flat", borderwidth=0)
         style.map("Treeview", background=[("selected", "#164e63")],
                   foreground=[("selected", "#f0f9ff")])
-        style.configure("Title.TLabel", font=("Segoe UI", 24, "bold"), foreground="#38bdf8")
-        style.configure("Subtitle.TLabel", foreground="#94a3b8", font=("Segoe UI", 10))
-        style.configure("MetricTitle.TLabel", background="#172235", foreground="#94a3b8",
-                        font=("Segoe UI", 9))
-        style.configure("MetricValue.TLabel", background="#172235", foreground=fg,
-                        font=("Segoe UI", 16, "bold"))
+        style.map("Treeview.Heading", background=[("active", LINE)])
+        style.layout("Treeview", [("Treeview.treearea", {"sticky": "nswe"})])
+        self.root.configure(fg_color=BG)
 
-        self.root.configure(bg=bg)
+    def _table(self, parent, columns, widths, height, stretch, tags) -> ttk.Treeview:
+        frame = ctk.CTkFrame(parent, fg_color=CARD, corner_radius=8)
+        frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        tree = ttk.Treeview(frame, columns=columns, show="headings", height=height)
+        scroll = ctk.CTkScrollbar(frame, command=tree.yview, width=12)
+        tree.configure(yscrollcommand=scroll.set)
+        for column in columns:
+            tree.heading(column, text="P&L" if column == "pnl" else column.title())
+            tree.column(column, width=widths.get(column, 70), minwidth=40, anchor="w",
+                        stretch=column in stretch)
+        for tag, color in tags.items():
+            tree.tag_configure(tag, foreground=color)
+        tree.pack(side="left", fill="both", expand=True, padx=(6, 0), pady=6)
+        scroll.pack(side="right", fill="y", padx=(0, 4), pady=6)
+        return tree
 
     def _build_ui(self) -> None:
-        # Header
-        header = ttk.Frame(self.root, padding=(24, 16, 24, 10))
-        header.pack(fill="x")
-        ttk.Label(header, text="Aether", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(header, text="AI assistant and trading desk — chat, build, automate, trade on paper", style="Subtitle.TLabel").pack(anchor="w", pady=(2, 0))
+        # Header: name on the left, the three facts that matter on the right.
+        header = ctk.CTkFrame(self.root, fg_color="transparent")
+        header.pack(fill="x", padx=24, pady=(16, 6))
+        titles = ctk.CTkFrame(header, fg_color="transparent")
+        titles.pack(side="left")
+        Label(titles, text="Aether", text_color="#38bdf8",
+              font=("Segoe UI", 28, "bold")).pack(anchor="w")
+        Label(titles, text="AI assistant and trading desk — chat, build, automate, trade on paper",
+              text_color=MUTED, font=("Segoe UI", 12)).pack(anchor="w")
+        chips = ctk.CTkFrame(header, fg_color="transparent")
+        chips.pack(side="right")
+        from config import DESK_BRAIN_MODEL
+        from desk_view import model_name
+        self.header_mode = Label(chips, corner_radius=14, font=("Segoe UI", 11, "bold"),
+                                 padx=12, height=28)
+        self.header_mode.pack(side="left", padx=4)
+        Label(chips, text=f"⚖  Judge: {model_name(DESK_BRAIN_MODEL)}", fg_color=CARD_2,
+              corner_radius=14, padx=12, height=28, text_color="#cbd5e1",
+              font=("Segoe UI", 11)).pack(side="left", padx=4)
 
-        # One window, two tabs: chat on the left of the notebook, desk behind it
-        self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(fill="both", expand=True, padx=24, pady=(4, 0))
-        chat_tab = ttk.Frame(self.notebook, style="TPanel.TFrame")
-        self.notebook.add(chat_tab, text="  Chat  ")
+        # Footer first and anchored to the bottom, so a tall tab can never push
+        # the status line and project controls off the window.
+        footer = ctk.CTkFrame(self.root, fg_color="transparent")
+        footer.pack(side="bottom", fill="x", padx=24, pady=(0, 10))
+        self.status = Label(footer, text="● Ready", text_color="#00e676", anchor="w",
+                            font=("Segoe UI", 11))
+        self.status.pack(side="left", fill="x", expand=True)
+        ctk.CTkButton(footer, text="Choose folder", width=110, height=28, fg_color=CARD_2,
+                      hover_color=LINE, command=self.choose_project).pack(side="right")
+        ctk.CTkButton(footer, text="Open", width=60, height=28, fg_color=CARD_2,
+                      hover_color=LINE, command=self.open_workspace).pack(side="right", padx=6)
+        self.project_label = Label(footer, text=f"Project: {self.project_root.name}",
+                                   text_color=MUTED)
+        self.project_label.pack(side="right", padx=10)
+        self.progress = Progress(self.root, mode="determinate", height=4,
+                                 progress_color=ACCENT, fg_color=CARD)
+        self.progress.set(0)
+        self.progress.pack(side="bottom", fill="x", padx=24, pady=(0, 6), before=footer)
 
-        # Chat area
-        chat_frame = ttk.Frame(chat_tab, style="TPanel.TFrame")
-        chat_frame.pack(fill="both", expand=True)
-        chat_scroll = ttk.Scrollbar(chat_frame, orient="vertical")
-        self.chat = ChatText(chat_frame, yscrollcommand=chat_scroll.set)
-        chat_scroll.configure(command=self.chat.yview)
-        chat_scroll.pack(side="right", fill="y")
-        self.chat.pack(side="left", fill="both", expand=True)
+        self.notebook = ctk.CTkTabview(self.root, fg_color=CARD, corner_radius=14,
+                                       segmented_button_selected_color=ACCENT,
+                                       segmented_button_selected_hover_color="#38bdf8",
+                                       segmented_button_unselected_color=CARD_2,
+                                       segmented_button_fg_color=CARD_2)
+        self.notebook.pack(fill="both", expand=True, padx=20, pady=(0, 6))
+        self.notebook._segmented_button.configure(font=("Segoe UI", 13, "bold"), height=34)
+        chat_tab = self.notebook.add("  Chat  ")
+        desk_tab = self.notebook.add("  Desk  ")
+        self._build_chat_tab(chat_tab)
+        self._build_desk_tab(desk_tab)
 
-        # Welcome message
+
+    def _build_chat_tab(self, tab) -> None:
+        chat_card = card(tab)
+        chat_card.pack(fill="both", expand=True, padx=4, pady=(4, 8))
+        self.chat = ChatText(chat_card)
+        self.chat.configure(bg=CARD_2, highlightthickness=0)
+        chat_scroll = ctk.CTkScrollbar(chat_card, command=self.chat.yview)
+        self.chat.configure(yscrollcommand=chat_scroll.set)
+        chat_scroll.pack(side="right", fill="y", padx=(0, 6), pady=8)
+        self.chat.pack(side="left", fill="both", expand=True, padx=(8, 0), pady=8)
+
         self.chat.append("Aether: Hello. I'm Aether — I can chat, build code, and run the paper trading desk. How can I help?", "aether", "aether_linesep")
-
-        # Replay recent conversation from memory
         for speaker, text, _ts in self.conversation[-10:]:
             if speaker == "user":
                 self.chat.append(f"You: {text}", "user", "user_linesep")
             else:
                 self.chat.append(f"Aether: {text}", "aether", "aether_linesep")
 
-        # Input area
-        input_frame = ttk.Frame(chat_tab, style="TPanel.TFrame", padding=(14, 10, 14, 12))
-        input_frame.pack(fill="x")
+        # Shown only while a build proposal is waiting for a decision. The old
+        # window created these buttons but never placed them, so a proposal
+        # could not be approved from the app at all.
+        self.approval_bar = ctk.CTkFrame(tab, fg_color="#0c4a6e", corner_radius=10)
+        Label(self.approval_bar, text="📝  Proposal ready — validate it, then approve to write the files",
+              text_color="#e0f2fe", font=("Segoe UI", 12, "bold")).pack(side="left", padx=14, pady=8)
+        self.approve_btn = ctk.CTkButton(self.approval_bar, text="Approve & write", width=140,
+                                         fg_color=GREEN, hover_color="#16a34a",
+                                         command=self.approve, state="disabled")
+        self.approve_btn.pack(side="right", padx=(6, 12), pady=8)
+        self.validate_btn = ctk.CTkButton(self.approval_bar, text="Validate", width=100,
+                                          fg_color=CARD_2, hover_color=LINE,
+                                          command=self.validate_current_proposal)
+        self.validate_btn.pack(side="right", pady=8)
 
-        # Mode + controls row
-        ctrl_row = ttk.Frame(input_frame, style="TPanel.TFrame")
-        ctrl_row.pack(fill="x", pady=(0, 5))
+        controls = ctk.CTkFrame(tab, fg_color="transparent")
+        controls.pack(fill="x", padx=6, pady=(0, 6))
+        self._controls = controls
+        for text, var in (("Fast", self.fast_var), ("Auto-approve", self.auto_var),
+                          ("Web research", self.web_var), ("Auto web", self.auto_web_var)):
+            ctk.CTkSwitch(controls, text=text, variable=var, progress_color=ACCENT,
+                          font=("Segoe UI", 11)).pack(side="left", padx=(0, 14))
+        Label(controls, text="Review rounds", text_color=MUTED).pack(side="left", padx=(6, 6))
+        ctk.CTkSegmentedButton(controls, values=["0", "1", "2"], variable=self.rounds_var,
+                               selected_color=ACCENT, width=110).pack(side="left")
 
-        ttk.Label(ctrl_row, text="MODE", style="TPanel.TLabel",
-                  foreground="#7dd3fc", font=("Segoe UI", 9, "bold")).pack(side="left")
-        ttk.Label(ctrl_row, text="Automatic intent", style="TPanel.TLabel",
-                  foreground="#94a3b8").pack(side="left", padx=(8, 14))
+        tools = ctk.CTkFrame(tab, fg_color="transparent")
+        tools.pack(fill="x", padx=6, pady=(0, 8))
+        self.voice_btn = self._ghost(tools, "🔈 Voice off", self.toggle_voice)
+        for text, command in (("📂 Vault", self.open_vault), ("💾 Save to vault", self.save_to_vault),
+                              ("🧹 Clear chat", self.clear_chat), ("✓ Check models", self.check_models),
+                              ("⟳ Updates", self.check_updates)):
+            self._ghost(tools, text, command)
 
-        self.fast_btn = ttk.Checkbutton(ctrl_row, text="Fast", variable=self.fast_var, style="TCheckbutton")
-        self.fast_btn.pack(side="left", padx=(0, 12))
-        self.auto_btn = ttk.Checkbutton(ctrl_row, text="Auto", variable=self.auto_var, style="TCheckbutton")
-        self.auto_btn.pack(side="left", padx=(0, 12))
-        ttk.Checkbutton(ctrl_row, text="Web research", variable=self.web_var,
-                        style="TCheckbutton").pack(side="left", padx=(0, 12))
-        ttk.Checkbutton(ctrl_row, text="Auto web", variable=self.auto_web_var,
-                        style="TCheckbutton").pack(side="left", padx=(0, 12))
-        ttk.Label(ctrl_row, text="Review rounds", style="TPanel.TLabel",
-                  foreground="#94a3b8").pack(side="left", padx=(2, 6))
-        ttk.Spinbox(ctrl_row, from_=0, to=2, width=4,
-                    textvariable=self.rounds_var).pack(side="left")
-
-        utility_row = ttk.Frame(input_frame, style="TPanel.TFrame")
-        utility_row.pack(fill="x", pady=(2, 8))
-        self.voice_btn = ttk.Button(utility_row, text="Voice off", command=self.toggle_voice)
-        self.voice_btn.pack(side="left", padx=(0, 7))
-        ttk.Button(utility_row, text="Open vault", command=self.open_vault).pack(side="left", padx=(0, 7))
-        ttk.Button(utility_row, text="Save to vault", command=self.save_to_vault).pack(side="left", padx=(0, 7))
-        ttk.Button(utility_row, text="Clear chat", command=self.clear_chat).pack(side="left", padx=(0, 7))
-        ttk.Button(utility_row, text="Check models", command=self.check_models).pack(side="left", padx=(0, 7))
-        ttk.Button(utility_row, text="Check updates", command=self.check_updates).pack(side="left")
-
-        # Text input
-        self.input_var = tk.StringVar()
-        self.input_entry = ttk.Entry(input_frame, textvariable=self.input_var, font=("Segoe UI", 11))
+        entry_row = ctk.CTkFrame(tab, fg_color="transparent")
+        entry_row.pack(fill="x", padx=6, pady=(0, 6))
+        # No textvariable: CTkEntry hides its placeholder when one is attached.
+        self.input_entry = ctk.CTkEntry(entry_row, height=42,
+                                        corner_radius=21, border_color=LINE, fg_color=CARD_2,
+                                        font=("Segoe UI", 13),
+                                        placeholder_text="Ask Aether, or say \"run the desk\"…")
         self.input_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
         self.input_entry.bind("<Return>", lambda _e: self.start_run())
         self.input_entry.focus_set()
+        self.cancel_btn = ctk.CTkButton(entry_row, text="Cancel", width=90, height=42,
+                                        corner_radius=21, fg_color=CARD_2, hover_color=LINE,
+                                        command=self.cancel_run, state="disabled")
+        self.cancel_btn.pack(side="left", padx=(0, 8))
+        self.send_btn = ctk.CTkButton(entry_row, text="Send  ➤", width=110, height=42,
+                                      corner_radius=21, fg_color=ACCENT, hover_color="#38bdf8",
+                                      font=("Segoe UI", 13, "bold"), command=self.start_run)
+        self.send_btn.pack(side="left")
 
-        self.send_btn = ttk.Button(input_frame, text="Send", command=self.start_run,
-                                   style="Accent.TButton")
-        self.send_btn.pack(side="right", padx=(8, 0))
-        self.cancel_btn = ttk.Button(input_frame, text="Cancel", command=self.cancel_run,
-                                     state="disabled")
-        self.cancel_btn.pack(side="right")
+    def _ghost(self, parent, text: str, command) -> ctk.CTkButton:
+        button = ctk.CTkButton(parent, text=text, command=command, height=30, width=10,
+                               fg_color=CARD_2, hover_color=LINE, text_color="#cbd5e1",
+                               corner_radius=15, font=("Segoe UI", 11))
+        button.pack(side="left", padx=(0, 6))
+        return button
 
-        # Desk tab
-        desk_tab = ttk.Frame(self.notebook, style="TPanel.TFrame", padding=(0, 8, 0, 8))
-        self.notebook.add(desk_tab, text="  Desk  ")
-        self._build_desk_tab(desk_tab)
-
-        # Status bar
-        self.status = ttk.Label(self.root, text="● Ready", anchor="w", foreground="#00e676")
-        self.status.pack(fill="x", padx=20, pady=(0, 8))
-        self.progress = ttk.Progressbar(self.root, mode="indeterminate")
-        self.progress.pack(fill="x", padx=20, pady=(0, 10))
-
-        # Project selector (small, bottom right)
-        proj_frame = ttk.Frame(self.root, style="TPanel.TFrame")
-        proj_frame.pack(fill="x", padx=20, pady=(0, 10))
-        self.project_label = ttk.Label(proj_frame, text=f"Project: {self.project_root.name}", style="TPanel.TLabel")
-        self.project_label.pack(side="left")
-        ttk.Button(proj_frame, text="Choose Folder", command=self.choose_project).pack(side="right")
-        ttk.Button(proj_frame, text="Open", command=self.open_workspace).pack(side="right", padx=(0, 8))
+    def _show_approval(self, show: bool) -> None:
+        if show and not self.approval_bar.winfo_manager():
+            self.approval_bar.pack(fill="x", padx=6, pady=(0, 8), before=self._controls)
+        elif not show and self.approval_bar.winfo_manager():
+            self.approval_bar.pack_forget()
 
     # ------------------------------------------------------------------ Desk
     #
-    # The tab is a *view*. Every number it shows comes from runner.state(); it
-    # never reaches into the broker itself, so the desk keeps running at full
-    # speed even while the window is repainting.
+    # The tab is a *view*. Every number it shows comes from runner.state() and
+    # the ledger; it never reaches into the broker itself, so the desk keeps
+    # running at full speed even while the window is repainting.
     def _build_desk_tab(self, parent) -> None:
-        bar = ttk.Frame(parent, style="TPanel.TFrame")
-        bar.pack(fill="x")
-
+        bar = ctk.CTkFrame(parent, fg_color="transparent")
+        bar.pack(fill="x", padx=4, pady=(4, 8))
         # The one thing a trading screen must never leave in doubt.
-        self.desk_mode_label = tk.Label(bar, font=("Segoe UI", 11, "bold"), padx=14, pady=6)
+        self.desk_mode_label = Label(bar, corner_radius=10, height=36, padx=14,
+                                     font=("Segoe UI", 13, "bold"))
         self._desk_badge(DESK_EXECUTION_MODE)
         self.desk_mode_label.pack(side="left", padx=(0, 12))
-
-        self.desk_start_btn = ttk.Button(bar, text="Start desk", command=self.desk_start,
-                                         style="Accent.TButton")
+        self.desk_start_btn = ctk.CTkButton(bar, text="▶  Start desk", width=130, height=36,
+                                            fg_color=ACCENT, hover_color="#38bdf8",
+                                            font=("Segoe UI", 12, "bold"), command=self.desk_start)
         self.desk_start_btn.pack(side="left", padx=(0, 8))
-        self.desk_stop_btn = ttk.Button(bar, text="Stop", command=self.desk_stop,
-                                        state="disabled")
+        self.desk_stop_btn = ctk.CTkButton(bar, text="■  Stop", width=90, height=36,
+                                           fg_color=CARD_2, hover_color=LINE,
+                                           command=self.desk_stop, state="disabled")
         self.desk_stop_btn.pack(side="left", padx=(0, 8))
-        self.desk_panic_btn = ttk.Button(bar, text="PANIC", command=self.desk_panic,
-                                         style="Danger.TButton", state="disabled")
+        self.desk_panic_btn = ctk.CTkButton(bar, text="⚠  PANIC", width=110, height=36,
+                                            fg_color="#991b1b", hover_color=RED,
+                                            font=("Segoe UI", 12, "bold"),
+                                            command=self.desk_panic, state="disabled")
         self.desk_panic_btn.pack(side="left", padx=(0, 16))
-
         self.desk_venue_vars = {"stocks": tk.BooleanVar(value=True),
                                 "crypto": tk.BooleanVar(value=True)}
         for venue, var in self.desk_venue_vars.items():
-            ttk.Checkbutton(bar, text=venue, variable=var,
-                            style="TCheckbutton").pack(side="left", padx=(0, 6))
-
-        self.desk_summary = ttk.Label(parent, text="DESK IDLE", style="TPanel.TLabel",
-                                      foreground="#9aa7b2", font=("Segoe UI", 10, "bold"))
-        self.desk_summary.pack(fill="x", pady=(10, 6))
-
-        metrics = ttk.Frame(parent, style="TPanel.TFrame")
-        metrics.pack(fill="x", pady=(0, 10))
-        self.desk_metrics = {}
-        for column, (key, title, initial, color) in enumerate((
-            ("equity", "EQUITY", "—", "#e0e0e0"),
-            ("pnl", "P&L (ALL TIME)", "—", "#e0e0e0"),
-            ("positions", "OPEN POSITIONS", "0", "#e0e0e0"),
-            ("dial", "RISK DIAL", "0.00", "#4fc3f7"),
-            ("record", "CLOSED RECORD", "No trades", "#e0e0e0"),
-        )):
-            metrics.columnconfigure(column, weight=1, uniform="desk_metric")
-            card = ttk.Frame(metrics, style="TCard.TFrame", padding=(12, 8))
-            card.grid(row=0, column=column, sticky="nsew",
-                      padx=(0 if column == 0 else 4, 0 if column == 4 else 4))
-            ttk.Label(card, text=title, style="MetricTitle.TLabel").pack(anchor="w")
-            value = ttk.Label(card, text=initial, style="MetricValue.TLabel",
-                              foreground=color)
-            value.pack(anchor="w", pady=(3, 0))
-            self.desk_metrics[key] = value
+            ctk.CTkSwitch(bar, text=venue.title(), variable=var, progress_color=ACCENT,
+                          font=("Segoe UI", 11)).pack(side="left", padx=(0, 10))
+        self.desk_summary = Label(bar, text="DESK IDLE", text_color="#9aa7b2",
+                                  font=("Segoe UI", 11, "bold"))
+        self.desk_summary.pack(side="right")
 
         # Anything that makes the desk look healthier than it is. Normally
         # empty, and packed away when it is.
-        self.desk_health = ttk.Label(parent, text="", style="TPanel.TLabel",
-                                     foreground="#ffab40", wraplength=760,
-                                     justify="left")
+        self.desk_health = Label(parent, text="", text_color=AMBER, wraplength=900,
+                                 justify="left", anchor="w")
 
-        # Equity over every recorded cycle, from the ledger.
-        self.desk_chart = tk.Canvas(parent, height=70, bg="#0f172a", highlightthickness=1,
-                                    highlightbackground="#263449")
-        self.desk_chart.pack(fill="x", pady=(0, 10))
+        metrics = ctk.CTkFrame(parent, fg_color="transparent")
+        metrics.pack(fill="x", padx=4, pady=(0, 8))
+        self._desk_metrics_row = metrics
+        self.desk_metrics = {}
+        for column, (key, title, initial, color) in enumerate((
+            ("equity", "EQUITY", "—", TEXT),
+            ("pnl", "P&L · ALL TIME", "—", TEXT),
+            ("positions", "OPEN POSITIONS", "0", TEXT),
+            ("dial", "RISK DIAL", "0.00", "#38bdf8"),
+            ("record", "CLOSED RECORD", "No trades", TEXT),
+        )):
+            metrics.columnconfigure(column, weight=1, uniform="desk_metric")
+            box = card(metrics)
+            box.grid(row=0, column=column, sticky="nsew", padx=(0 if column == 0 else 5, 0))
+            Label(box, text=title, text_color=MUTED, font=("Segoe UI", 10, "bold"),
+                  anchor="w").pack(fill="x", padx=14, pady=(10, 0))
+            value = Label(box, text=initial, text_color=color, font=("Segoe UI", 20, "bold"),
+                          anchor="w")
+            value.pack(fill="x", padx=14, pady=(0, 10))
+            self.desk_metrics[key] = value
 
-        # What the desk is watching, and what the AI judge has said.
-        panels = ttk.Frame(parent, style="TPanel.TFrame")
-        panels.pack(fill="x", pady=(0, 10))
+        chart_card = card(parent)
+        chart_card.pack(fill="x", padx=4, pady=(0, 8))
+        self.desk_chart = tk.Canvas(chart_card, height=56, bg=CARD_2, highlightthickness=0)
+        self.desk_chart.pack(fill="x", padx=10, pady=8)
+
+        panels = ctk.CTkFrame(parent, fg_color="transparent")
+        panels.pack(fill="x", padx=4, pady=(0, 8))
         panels.columnconfigure(0, weight=1, uniform="desk_panel")
         panels.columnconfigure(1, weight=1, uniform="desk_panel")
-        watch_box = ttk.Frame(panels, style="TPanel.TFrame")
-        watch_box.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
-        ttk.Label(watch_box, text="WATCHLIST — validated rules first", style="TPanel.TLabel",
-                  font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(0, 4))
-        self.desk_watch = ttk.Treeview(watch_box, columns=("symbol", "rule", "status"),
-                                       show="headings", height=6)
-        for column, width in (("symbol", 70), ("rule", 80), ("status", 260)):
-            self.desk_watch.heading(column, text=column.title())
-            self.desk_watch.column(column, width=width, anchor="w", stretch=column == "status")
-        self.desk_watch.tag_configure("ready", foreground="#7dd3fc")
-        self.desk_watch.tag_configure("bought", foreground="#4caf50")
-        self.desk_watch.tag_configure("benched", foreground="#64748b")
-        self.desk_watch.pack(fill="x")
-
-        judge_box = ttk.Frame(panels, style="TPanel.TFrame")
-        judge_box.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
-        from desk_view import model_name
+        watch_box = card(panels)
+        watch_box.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
+        heading(watch_box, "👁  WATCHLIST — validated rules first").pack(fill="x", padx=12, pady=(10, 6))
+        self.desk_watch = self._table(watch_box, ("symbol", "rule", "status"),
+                                      {"symbol": 70, "rule": 85, "status": 250}, 5, {"status"},
+                                      {"ready": "#7dd3fc", "bought": GREEN, "benched": "#64748b"})
+        judge_box = card(panels)
+        judge_box.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
         from config import DESK_BRAIN_MODEL
-        ttk.Label(judge_box, text=f"AI JUDGE — {model_name(DESK_BRAIN_MODEL)}",
-                  style="TPanel.TLabel", font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(0, 4))
-        self.desk_judge = ttk.Treeview(judge_box, columns=("when", "symbol", "verdict", "conf", "note"),
-                                       show="headings", height=6)
-        for column, width in (("when", 90), ("symbol", 60), ("verdict", 60), ("conf", 45), ("note", 160)):
-            self.desk_judge.heading(column, text=column.title())
-            self.desk_judge.column(column, width=width, anchor="w", stretch=column == "note")
-        self.desk_judge.tag_configure("buy", foreground="#4caf50")
-        self.desk_judge.tag_configure("hold", foreground="#fbbf24")
-        self.desk_judge.tag_configure("skip", foreground="#94a3b8")
-        self.desk_judge.pack(fill="x")
+        from desk_view import model_name
+        heading(judge_box, f"🤖  AI JUDGE — {model_name(DESK_BRAIN_MODEL)}").pack(fill="x", padx=12, pady=(10, 6))
+        self.desk_judge = self._table(judge_box, ("when", "symbol", "verdict", "conf", "note"),
+                                      {"when": 90, "symbol": 60, "verdict": 65, "conf": 45, "note": 150},
+                                      5, {"note"}, {"buy": GREEN, "hold": AMBER, "skip": MUTED})
 
-        ttk.Label(parent, text="OPEN POSITIONS", style="TPanel.TLabel",
-                  font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(0, 4))
-        table = ttk.Frame(parent, style="TPanel.TFrame")
-        table.pack(fill="x")
-        columns = ("symbol", "qty", "entry", "mark", "pnl", "stop", "take",
-                   "venue", "mode")
-        position_y = ttk.Scrollbar(table, orient="vertical")
-        self.desk_tree = ttk.Treeview(table, columns=columns, show="headings", height=3,
-                                      yscrollcommand=position_y.set)
-        position_y.configure(command=self.desk_tree.yview)
-        # Columns stretch to the window, so nothing hides behind a sideways scroll.
-        for column in columns:
-            self.desk_tree.heading(column, text="P&L" if column == "pnl" else column.title())
-            self.desk_tree.column(column, width=70, minwidth=50, anchor="w", stretch=True)
-        self.desk_tree.column("symbol", width=90)
-        self.desk_tree.column("pnl", width=130)
-        self.desk_tree.tag_configure("up", foreground="#4caf50")
-        self.desk_tree.tag_configure("down", foreground="#ff5252")
-        self.desk_tree.tag_configure("empty", foreground="#64748b")
-        self.desk_tree.grid(row=0, column=0, sticky="nsew")
-        position_y.grid(row=0, column=1, sticky="ns")
-        table.columnconfigure(0, weight=1)
-
-        ttk.Label(parent, text="RECENT DECISIONS", style="TPanel.TLabel",
-                  font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(10, 4))
-        decisions_frame = ttk.Frame(parent, style="TPanel.TFrame")
-        decisions_frame.pack(fill="x")
-        decision_y = ttk.Scrollbar(decisions_frame, orient="vertical")
-        decision_x = ttk.Scrollbar(decisions_frame, orient="horizontal")
-
-        self.desk_decisions = ttk.Treeview(
-            decisions_frame, columns=("symbol", "action", "conf", "vetoed", "why"),
-            show="headings", height=3, xscrollcommand=decision_x.set,
-            yscrollcommand=decision_y.set)
-        decision_y.configure(command=self.desk_decisions.yview)
-        decision_x.configure(command=self.desk_decisions.xview)
-        for column, width in (("symbol", 130), ("action", 80), ("conf", 70),
-                              ("vetoed", 110), ("why", 380)):
-            self.desk_decisions.heading(column, text=column.title())
-            self.desk_decisions.column(column, width=width, minwidth=width,
-                                       anchor="w", stretch=column == "why")
-        self.desk_decisions.tag_configure("buy", foreground="#4caf50")
-        self.desk_decisions.tag_configure("skip", foreground="#78909c")
-        self.desk_decisions.tag_configure("empty", foreground="#64748b")
-        self.desk_decisions.grid(row=0, column=0, sticky="nsew")
-        decision_y.grid(row=0, column=1, sticky="ns")
-        decision_x.grid(row=1, column=0, sticky="ew")
-        decisions_frame.columnconfigure(0, weight=1)
-
-        self.desk_log = ChatText(parent, height=5)
-        self.desk_log.pack(fill="both", expand=True, pady=(8, 0))
+        lower = ctk.CTkTabview(parent, fg_color=CARD_2, corner_radius=12, height=150,
+                               segmented_button_selected_color=ACCENT,
+                               segmented_button_unselected_color=CARD,
+                               segmented_button_fg_color=CARD)
+        lower.pack(fill="both", expand=True, padx=4, pady=(0, 4))
+        self.desk_tree = self._table(
+            lower.add("Open positions"),
+            ("symbol", "qty", "entry", "mark", "pnl", "stop", "take", "venue", "mode"),
+            {"symbol": 90, "pnl": 130}, 3,
+            {"symbol", "qty", "entry", "mark", "pnl", "stop", "take", "venue", "mode"},
+            {"up": GREEN, "down": RED, "empty": "#64748b"})
+        self.desk_decisions = self._table(
+            lower.add("Recent decisions"), ("symbol", "action", "conf", "vetoed", "why"),
+            {"symbol": 90, "action": 70, "conf": 55, "vetoed": 100, "why": 380}, 3, {"why"},
+            {"buy": GREEN, "skip": "#78909c", "empty": "#64748b"})
+        log_tab = lower.add("Log")
+        self.desk_log = ChatText(log_tab, height=6)
+        self.desk_log.configure(bg=CARD)
+        self.desk_log.pack(fill="both", expand=True, padx=6, pady=(0, 6))
         self.desk_log.append("Desk ready. Start runs cycles until Stop; PANIC halts and "
                              "flattens everything. The scheduled task also runs one paper "
                              "cycle every day at 4:30 pm.", "meta")
@@ -595,9 +600,11 @@ class BuilderApp:
 
     def _desk_badge(self, label: str) -> None:
         live = "live" in label
-        self.desk_mode_label.configure(
-            text="● LIVE · REAL MONEY" if live else "● PAPER · simulated money",
-            bg="#b91c1c" if live else "#b45309", fg="#fff7ed")
+        for widget, text in ((self.desk_mode_label,
+                              "● LIVE · REAL MONEY" if live else "● PAPER · simulated money"),
+                             (self.header_mode, "● LIVE" if live else "● PAPER")):
+            widget.configure(text=text, fg_color="#b91c1c" if live else "#b45309",
+                             text_color="#fff7ed")
 
     def _desk_render(self, snapshot: dict) -> None:
         modes = sorted({p.get("mode", "") for p in snapshot.get("positions", [])})
@@ -634,10 +641,10 @@ class BuilderApp:
         health = snapshot.get("health") or []
         if health:
             self.desk_health.configure(text="⚠ " + " · ".join(health))
-            if not self.desk_health.winfo_ismapped():
-                self.desk_health.pack(fill="x", before=self.desk_summary,
-                                      pady=(0, 6))
-        elif self.desk_health.winfo_ismapped():
+            if not self.desk_health.winfo_manager():
+                self.desk_health.pack(fill="x", before=self._desk_metrics_row,
+                                      padx=6, pady=(0, 6))
+        elif self.desk_health.winfo_manager():
             self.desk_health.pack_forget()
 
         positions = snapshot.get("positions", [])
@@ -744,14 +751,14 @@ class BuilderApp:
 
     # ------------------------------------------------------------------ Run pipeline
     def start_run(self) -> None:
-        request = self.input_var.get().strip()
+        request = self.input_entry.get().strip()
         if not request:
             return
-        self.input_var.set("")
+        self.input_entry.delete(0, "end")
         self.send_btn.configure(state="disabled")
         self.cancel_btn.configure(state="normal")
         self._add_user(request)
-        self.status.configure(text="● Running local agents...", foreground="#007acc")
+        self.status.configure(text="● Running agents...", foreground="#007acc")
         self.progress.start(12)
         self.log_event("Started task")
         self.orchestrator = Orchestrator(
@@ -793,7 +800,7 @@ class BuilderApp:
         except CancelledError:
             self.root.after(0, self.finish_cancelled)
         except Exception as exc:  # noqa: BLE001
-            self.root.after(0, lambda: self.fail_run(str(exc)))
+            self.root.after(0, lambda error=str(exc): self.fail_run(error))
 
     def finish_build(self, result) -> None:
         self.progress.stop()
@@ -866,14 +873,8 @@ class BuilderApp:
         else:
             self._add_aether(f"{summary}. Ready for your review.")
             self.log_event("Proposal ready for your approval")
-
-            self.validate_btn = ttk.Button(
-                self.root, text="Validate Proposal", command=self.validate_current_proposal
-            )
-            self.approve_btn = ttk.Button(
-                self.root, text="Approve & Write", command=self.approve, state="disabled"
-            )
-            # Place buttons temporarily (simplified — they appear in status area)
+            self.approve_btn.configure(state="disabled")
+            self._show_approval(True)
             self.status.configure(text="● Review complete — inspect before approving", foreground="#007acc")
 
         if result.validation and result.validation[0]:
@@ -913,7 +914,7 @@ class BuilderApp:
             answer = self.orchestrator.run_qa(question)
             self.root.after(0, lambda: self.finish_qa(answer))
         except Exception as exc:  # noqa: BLE001
-            self.root.after(0, lambda: self.fail_run(str(exc)))
+            self.root.after(0, lambda error=str(exc): self.fail_run(error))
 
     def finish_qa(self, answer: str) -> None:
         self.progress.stop()
@@ -942,8 +943,7 @@ class BuilderApp:
             text=("● Proposal passed validation" if ok else "● Proposal needs repair"),
             foreground="#00e676" if ok else "#ff5252",
         )
-        if hasattr(self, "approve_btn"):
-            self.approve_btn.configure(state="normal" if ok else "disabled")
+        self.approve_btn.configure(state="normal" if ok else "disabled")
         self.log_event("Proposal validation " + ("passed" if ok else "found issues"))
 
     def approve(self) -> None:
@@ -961,8 +961,8 @@ class BuilderApp:
             messagebox.showerror("Apply failed", str(exc))
             return
         self._add_aether(f"Applied {len(self.result.files_written)} file(s) to project.")
-        if hasattr(self, "approve_btn"):
-            self.approve_btn.configure(state="disabled")
+        self.approve_btn.configure(state="disabled")
+        self._show_approval(False)
         self.status.configure(text=f"● Applied {len(self.result.files_written)} file(s)", foreground="#00e676")
         self.log_event("Approved files written to the project")
         messagebox.showinfo("Files applied", "The approved files were written to the workspace folder.")
@@ -1101,7 +1101,7 @@ class BuilderApp:
             result = analyze_media(path)
             self.root.after(0, lambda: self.finish_media(result))
         except Exception as exc:
-            self.root.after(0, lambda: self.fail_media(str(exc)))
+            self.root.after(0, lambda error=str(exc): self.fail_media(error))
 
     def finish_media(self, result: str) -> None:
         self.chat.append(f"\nMEDIA ANALYSIS\n{'=' * 40}\n{result}", "system", "system")
@@ -1126,7 +1126,9 @@ class BuilderApp:
 
 if __name__ == "__main__":
     WORKSPACE.mkdir(parents=True, exist_ok=True)
-    root = tk.Tk()
+    ctk.set_appearance_mode("dark")
+    ctk.set_default_color_theme("blue")
+    root = ctk.CTk()  # DPI-aware: sharp text instead of Windows' bitmap stretch
     app = BuilderApp(root)
     # Bring window to front reliably on launch
     root.lift()

@@ -44,8 +44,9 @@ pyinstaller --noconfirm --clean --windowed --name Aether --paths $project `
     --add-data="memory.md;." `
     --add-data="memory.db;." `
     --add-data="mcp_servers.json;." `
+    --collect-data customtkinter `
     desktop_ui.py
 
 Write-Host "Aether executable created in $project\dist\Aether\Aether.exe"
-Write-Host "Ollama remains installed separately and supplies the local models."
+Write-Host "Models are hosted (OpenRouter / NIM); Ollama is optional, for offline use only."
 Write-Host "Data files (vault/, memory.md, memory.db, mcp_servers.json) are bundled."
