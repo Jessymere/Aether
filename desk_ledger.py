@@ -357,6 +357,12 @@ def record_equity(conn: sqlite3.Connection, equity: float, cash: float,
     return int(cur.lastrowid)
 
 
+def equity_history(conn: sqlite3.Connection, mode: str = "paper") -> list[tuple[str, float]]:
+    """``(ts, equity)`` for one mode, oldest first — what the kill switch reads."""
+    return [(r["ts"], r["equity"]) for r in conn.execute(
+        "SELECT ts, equity FROM equity WHERE mode = ? ORDER BY id", (mode,))]
+
+
 def record_run(conn: sqlite3.Connection, mode: str, n_candidates: int, n_gated: int,
                n_filled: int, kill_switch: bool, notes: str = "") -> int:
     cur = conn.execute(

@@ -56,6 +56,7 @@ from desk_ledger import (
     record_equity,
     record_fill,
     record_run,
+    equity_history,
     record_verdict,
     rule_records,
     set_candidate_rule,
@@ -75,6 +76,7 @@ from desk_seats import (
     position_from_fill,
     record_summary,
     risk_check,
+    risk_inputs,
     scan,
     score_candidate,
     should_exit,
@@ -571,7 +573,7 @@ class DeskRunner:
         if record["closed_trades"] >= DESK_RECORD_MIN_TRADES:
             self._say(f"{venue}: record {record['win_rate']:.0%} win over "
                       f"{record['closed_trades']} closed; dial {dial.value:.2f}")
-        budget = chief_budget(broker.equity(), broker.cash(), dial, len(open_now))
+        budget = chief_budget(self._equity([venue])[0], broker.cash(), dial, len(open_now))
         held_at_start = len(open_now)
 
         for cand in sorted(candidates, key=score_candidate, reverse=True):
@@ -696,10 +698,23 @@ class DeskRunner:
             pass
 
     # -- the run ------------------------------------------------------------
+    def _equity(self, venues: Optional[list[str]] = None) -> tuple[float, float]:
+        """``(equity, cash)`` over ``venues`` (default all), positions at marks.
+
+        Computed here rather than by ``broker.equity()``: that valued positions
+        at cost (open losses were invisible to the kill switch), and the live
+        brokers do not all implement it.
+        """
+        venues = venues or self.venues
+        cash = sum(self._broker(v).cash() for v in venues)
+        held = sum(p.qty * self._marks.get(p.symbol, p.avg_price)
+                   for v in venues for p in self._broker(v).positions())
+        return cash + held, cash
+
     def run(self, cycles: int = 1) -> DeskResult:
         result = DeskResult(venues=list(self.venues), cycles=cycles,
                             log=self._log, ledger=str(self.conn and ""))
-        equity0 = sum(self._broker(v).equity() for v in self.venues)
+        equity0 = self._equity()[0]
         result.start_equity = result.equity = equity0
 
         if self.kill_file_present():
@@ -726,18 +741,17 @@ class DeskRunner:
                 except Exception as exc:  # noqa: BLE001 — one bad venue must not kill the run
                     self._say(f"{venue}: error {type(exc).__name__}: {exc}", "warn")
 
-            equity = sum(self._broker(v).equity() for v in self.venues)
+            equity, cash = self._equity()
             result.equity = equity
-            peak = max(result.start_equity, equity)
-            drawdown = ((peak - equity) / peak * 100) if peak else 0.0
-            day_pnl_pct = ((equity - result.start_equity) / result.start_equity * 100
-                           if result.start_equity else 0.0)
-            for venue in self.venues:
-                record_equity(self.conn, equity, self._broker(venue).cash(),
-                              drawdown=drawdown, day_pnl=day_pnl_pct)
+            modes = {self._broker(v).mode for v in self.venues}
+            mode = modes.pop() if len(modes) == 1 else "mixed"
+            day_pnl_pct, drawdown, losing_days = risk_inputs(
+                equity_history(self.conn, mode), equity, now()[:10])
+            record_equity(self.conn, equity, cash, positions_value=equity - cash,
+                          drawdown=drawdown, day_pnl=day_pnl_pct, mode=mode)
 
             kill = risk_check(day_pnl_pct=day_pnl_pct, drawdown_pct=drawdown,
-                              losing_days=0)
+                              losing_days=losing_days)
             if kill.tripped:
                 result.kill_switch, result.kill_reason = True, kill.reason
                 self._say(f"KILL SWITCH: {kill.reason}", "warn")
@@ -759,7 +773,7 @@ class DeskRunner:
         result.ledger = str(self.conn.execute("PRAGMA database_list").fetchone()[2])
         record_run(self.conn, self.requested_mode, result.scanned, result.gated,
                    result.filled, result.kill_switch, result.kill_reason)
-        result.equity = sum(self._broker(v).equity() for v in self.venues)
+        result.equity = self._equity()[0]
         result.report = self._report(result)
         self.last_result = result
         self._write_log(result)
@@ -822,7 +836,7 @@ class DeskRunner:
             broker = self._broker(venue)
             if not isinstance(broker, PaperBroker):
                 return None
-            equity += broker.equity()
+            equity += self._equity([venue])[0]
             rows += [_row(p, self._marks.get(p.symbol))
                      for p in broker.positions()]
         return rows, equity

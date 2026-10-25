@@ -347,6 +347,33 @@ class KillSwitch:
     reason: str = ""
 
 
+def risk_inputs(history: list[tuple[str, float]], equity: float,
+                today: str) -> tuple[float, float, int]:
+    """``(day_pnl_pct, drawdown_pct, losing_days)`` from the equity ledger.
+
+    ``history`` is ``(ts, equity)`` rows, oldest first. Measured against the
+    ledger rather than the start of this run: a runner restarted every cycle
+    otherwise saw a one-cycle "day", a one-cycle peak and no losing days, so
+    the kill switch could never trip.
+    """
+    todays = [e for ts, e in history if ts[:10] == today]
+    day_start = todays[0] if todays else equity
+    peak = max([e for _, e in history] + [equity])
+    closes: dict[str, float] = {}
+    for ts, e in history:
+        if ts[:10] < today:
+            closes[ts[:10]] = e  # the day's last row is its close
+    days = sorted(closes)
+    losing = 0
+    for prev, day in zip(reversed(days[:-1]), reversed(days[1:])):
+        if closes[day] >= closes[prev]:
+            break
+        losing += 1
+    day_pnl = (equity / day_start - 1) * 100 if day_start else 0.0
+    drawdown = (peak - equity) / peak * 100 if peak else 0.0
+    return day_pnl, drawdown, losing
+
+
 def risk_check(*, day_pnl_pct: float, drawdown_pct: float,
                losing_days: int) -> KillSwitch:
     """Three ceilings. Any one breach trips the switch and the desk flattens."""

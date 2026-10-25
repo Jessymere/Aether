@@ -836,3 +836,12 @@ def test_a_failed_mark_skips_the_exit_check_instead_of_using_cost(
     monkeypatch.setattr(R, "scan", lambda venue, limit, source=None: [])
     r.run(cycles=1)
     assert len(open_positions(connect(desk_env["db"]))) == 1   # not sold blind
+
+
+def test_open_losses_trip_the_kill_switch(desk_env, stub_brain, monkeypatch, one_candidate):
+    r = runner(desk_env, stub_brain, monkeypatch)
+    r.run(cycles=1)                                   # buy SPY at 400
+    monkeypatch.setattr(R.DeskRunner, "_mark", lambda self, s, f, v="stocks": 1.0)  # crashes to $1
+    monkeypatch.setattr(R, "scan", lambda venue, limit, source=None: [])
+    result = r.run(cycles=1)
+    assert result.kill_switch and "loss" in result.kill_reason
