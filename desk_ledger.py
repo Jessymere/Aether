@@ -492,7 +492,9 @@ def closed_trades(conn: sqlite3.Connection, mode: str = "paper",
             exit_fee = fees / qty if qty else 0.0
             gross = (price - entry) * take
             cost = (entry_fee + exit_fee) * take
-            pct = ((price - entry) / entry * 100) if entry else 0.0
+            # Net of both legs' fees, like ``pnl``: a gross figure fed the judge
+            # an expectancy the win/loss count (net) did not agree with.
+            pct = ((gross - cost) / (entry * take) * 100) if entry and take else 0.0
             trades.append({"symbol": symbol, "venue": row["venue"] or "",
                            "entry": entry, "exit": price, "qty": take,
                            "rule_id": lot[3],

@@ -186,8 +186,9 @@ class PaperBroker:
         else:
             return None
 
-        fill = Fill(
-            symbol=order.symbol, side=order.side, qty=order.qty, price=price,
+        fill = Fill(  # a sell is clamped to what is held; record what was sold
+            symbol=order.symbol, side=order.side,
+            qty=qty if order.side == "sell" else order.qty, price=price,
             fees=fees, venue=order.venue, broker=self.name, mode=self.mode,
         )
         self.fills.append(fill)
@@ -674,10 +675,12 @@ class RobinhoodBroker:
             return None
         path = "/api/v1/crypto/trading/orders/"
         quantity = f"{order.qty:.8f}".rstrip("0").rstrip(".")
+        # Robinhood trades pairs ("BONK-USD"); a bare DexScreener symbol was refused.
+        pair = order.symbol if "-" in order.symbol else f"{order.symbol}-USD"
         body = {
             "client_order_id": uuid.uuid4().hex,
             "side": order.side,
-            "symbol": order.symbol,
+            "symbol": pair,
             "type": "market",
             "market_order_config": {"asset_quantity": quantity},
         }
@@ -690,7 +693,7 @@ class RobinhoodBroker:
             if "HTTP 400" not in str(exc):
                 return None
             legacy = {
-                "side": order.side, "symbol": order.symbol, "type": "market",
+                "side": order.side, "symbol": pair, "type": "market",
                 "quantity": quantity, "time_in_force": "gfd", "trigger": "immediate",
             }
             try:
