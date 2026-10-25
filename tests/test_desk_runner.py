@@ -845,3 +845,28 @@ def test_open_losses_trip_the_kill_switch(desk_env, stub_brain, monkeypatch, one
     monkeypatch.setattr(R, "scan", lambda venue, limit, source=None: [])
     result = r.run(cycles=1)
     assert result.kill_switch and "loss" in result.kill_reason
+
+
+def test_a_buy_and_the_kill_switch_raise_alerts(desk_env, stub_brain, monkeypatch, one_candidate):
+    r = runner(desk_env, stub_brain, monkeypatch)
+    r.run(cycles=1)
+    assert any("BOUGHT SPY" in a and "[PAPER]" in a for a in desk_env["alerts"])
+    monkeypatch.setattr(R.DeskRunner, "_mark", lambda self, s, f, v="stocks": 1.0)
+    monkeypatch.setattr(R, "scan", lambda venue, limit, source=None: [])
+    r.run(cycles=1)
+    assert any("KILL SWITCH" in a for a in desk_env["alerts"])
+
+
+def test_the_sector_cap_stops_a_third_tech_name_before_the_judge(desk_env, stub_brain, monkeypatch):
+    names = ["MSFT", "META", "NVDA"]
+    monkeypatch.setattr(R, "scan", lambda venue, limit, source=None: [
+        Candidate(symbol=s, venue="stocks", source="yahoo", price=10.0, raw={"bars_count": 400})
+        for s in names])
+    monkeypatch.setattr(R, "bars_for", lambda c, source=None: [])
+    monkeypatch.setattr(R, "DESK_MAX_PER_SECTOR", 2)
+    pass_gate(monkeypatch)
+    runner(desk_env, stub_brain, monkeypatch).run(cycles=1)
+    conn = connect(desk_env["db"])
+    assert {p.symbol for p in open_positions(conn)} == {"MSFT", "META"}
+    row = conn.execute("SELECT brain, skipped_reason FROM decisions WHERE symbol = 'NVDA'").fetchone()
+    assert row["brain"] == "gate" and "sector cap" in row["skipped_reason"]

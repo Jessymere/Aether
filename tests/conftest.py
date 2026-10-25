@@ -172,6 +172,10 @@ def desk_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
         return connect(paths["db"])
 
     monkeypatch.setattr(desk_runner, "connect", fake_connect)
+    # Never pop a real toast from a test; record what would have been shown.
+    paths["alerts"] = []
+    monkeypatch.setattr(desk_runner, "notify",
+                        lambda title, body: paths["alerts"].append(title) or True)
     # Marks never hit the network; cost basis is what we want. The exit loop
     # passes no fallback (a failed mark must skip exits), so look it up.
     def cost_basis(self, symbol, fallback, venue="stocks"):

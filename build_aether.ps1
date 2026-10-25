@@ -8,7 +8,7 @@ if (-not (Get-Command pyinstaller -ErrorAction SilentlyContinue)) {
 }
 
 # Compile all source files to catch syntax errors before building
-python -m py_compile desktop_ui.py agents.py config.py ollama_client.py orchestrator.py system.py vault.py self_improve.py update.py voice.py web_research.py vision.py link_tools.py patch_notes.py memory_store.py proposal_validation.py loop_guard.py decision_client.py mcp_client.py desk_backtest.py desk_brain.py desk_broker.py desk_data.py desk_ledger.py desk_runner.py desk_seats.py desk_solana.py desk_view.py preflight.py
+python -m py_compile desktop_ui.py agents.py config.py ollama_client.py orchestrator.py system.py vault.py self_improve.py update.py voice.py web_research.py vision.py link_tools.py patch_notes.py memory_store.py proposal_validation.py loop_guard.py decision_client.py mcp_client.py desk_backtest.py desk_brain.py desk_broker.py desk_data.py desk_ledger.py desk_runner.py desk_seats.py desk_solana.py desk_view.py preflight.py desk_alerts.py
 
 # Build the executable with all necessary hidden imports and data files
 pyinstaller --noconfirm --clean --windowed --name Aether --paths $project `
@@ -40,6 +40,7 @@ pyinstaller --noconfirm --clean --windowed --name Aether --paths $project `
     --hidden-import=desk_solana `
     --hidden-import=desk_view `
     --hidden-import=preflight `
+    --hidden-import=desk_alerts `
     --add-data="vault;vault" `
     --add-data="memory.md;." `
     --add-data="memory.db;." `

@@ -314,6 +314,17 @@ DESK_UNIVERSE = [
     if s.strip()
 ]
 
+#: Sector of each universe name, and how many open positions one sector may
+#: hold. MSFT, META, NVDA, AAPL and QQQ all move with big tech; without a cap a
+#: good week could fill every slot with what is really one bet. A symbol not in
+#: the map is its own sector.
+DESK_SECTORS = {
+    "AAPL": "tech", "MSFT": "tech", "NVDA": "tech", "META": "tech", "QQQ": "tech",
+    "SPY": "broad", "XLU": "utilities", "XLB": "materials", "UNH": "health",
+    "BTC-USD": "crypto", "ETH-USD": "crypto",
+}
+DESK_MAX_PER_SECTOR = _env_int("DESK_MAX_PER_SECTOR", 2)
+
 #: Anchored calendar split for the three verdicts. Bar history shorter than
 #: this falls back to a proportional split (see desk_backtest.proportional_split).
 DESK_TRAIN = ("2015-01-01", "2019-12-31")

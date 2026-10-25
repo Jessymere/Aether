@@ -36,9 +36,12 @@ from config import (
     DESK_RECORD_MIN_TRADES,
     DESK_RECORD_WINDOW,
     DESK_RECORD_WIN_FLOOR,
+    DESK_MAX_PER_SECTOR,
+    DESK_SECTORS,
     DESK_START_CAPITAL,
     desk_costs,
 )
+from desk_alerts import notify
 from desk_backtest import RULES
 from desk_broker import Order, PaperBroker, make_broker
 from desk_data import Candidate, DataUnavailable
@@ -547,6 +550,8 @@ class DeskRunner:
                 delete_position(self.conn, position.symbol, broker.mode)
                 result.filled += 1
                 self._say(f"{venue}: sold {position.symbol} — {why}")
+                notify(f"Aether desk [{broker.mode.upper()}] — SOLD {position.symbol}",
+                       f"{position.qty:g} @ {fill.price:g} · {why}")
 
         # 2. scan
         if self.status_cb:
@@ -607,6 +612,12 @@ class DeskRunner:
                 self._skip(cand, candidate_id, f"no {cand.rule_id} entry signal today",
                            "signal", result)
                 continue
+            sector = DESK_SECTORS.get(cand.symbol, cand.symbol)
+            in_sector = sum(DESK_SECTORS.get(s, s) == sector for s in open_now)
+            if in_sector >= DESK_MAX_PER_SECTOR:  # before the judge: no model call spent
+                self._skip(cand, candidate_id,
+                           f"sector cap: already {in_sector} {sector} position(s)", "sector", result)
+                continue
             result.gated += 1
 
             # One reading of the name's own noise, used by every seat below:
@@ -662,6 +673,8 @@ class DeskRunner:
             result.filled += 1
             self._say(f"{venue}: BOUGHT {qty:g} {cand.symbol} @ {fill.price:g} "
                       f"(conf {decision.confidence:.2f})", "trade")
+            notify(f"Aether desk [{broker.mode.upper()}] — BOUGHT {cand.symbol}",
+                   f"{qty:g} @ {fill.price:g} · {cand.rule_id} signal · judge {decision.confidence:.0%}")
 
     def _skip(self, cand: Candidate, candidate_id: int, reason: str, check: str,
               result: DeskResult, decision: Optional[Decision] = None) -> None:
@@ -755,6 +768,8 @@ class DeskRunner:
             if kill.tripped:
                 result.kill_switch, result.kill_reason = True, kill.reason
                 self._say(f"KILL SWITCH: {kill.reason}", "warn")
+                notify(f"Aether desk [{mode.upper()}] — KILL SWITCH",
+                       f"{kill.reason}. Flattening all positions; the desk is halted.")
                 self.panic(flatten=True, reason=kill.reason)
                 break
 
