@@ -30,7 +30,7 @@ from vision import analyze_media
 from link_tools import analyze_link
 from mcp_client import configured_servers, list_tools
 from patch_notes import restore_latest_backup
-from ollama_client import check_server
+from preflight import preflight
 from proposal_validation import validate_proposal
 from voice import Voice
 
@@ -107,7 +107,7 @@ class BuilderApp:
         self._load_conversation()
         self._setup_styles()
         self._build_ui()
-        self.root.after(200, self.check_ollama)
+        self.root.after(200, self.check_models)
 
     # ------------------------------------------------------------------ UI
     def _setup_styles(self) -> None:
@@ -169,7 +169,7 @@ class BuilderApp:
         header = ttk.Frame(self.root, padding=(24, 16, 24, 10))
         header.pack(fill="x")
         ttk.Label(header, text="Aether", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(header, text="Your local AI assistant — chat, build, automate", style="Subtitle.TLabel").pack(anchor="w", pady=(2, 0))
+        ttk.Label(header, text="AI assistant and trading desk — chat, build, automate, trade on paper", style="Subtitle.TLabel").pack(anchor="w", pady=(2, 0))
 
         # One window, two tabs: chat on the left of the notebook, desk behind it
         self.notebook = ttk.Notebook(self.root)
@@ -187,7 +187,7 @@ class BuilderApp:
         self.chat.pack(side="left", fill="both", expand=True)
 
         # Welcome message
-        self.chat.append("Aether: Hello. I'm your local AI assistant. How can I help you today?", "aether", "aether_linesep")
+        self.chat.append("Aether: Hello. I'm Aether — I can chat, build code, and run the paper trading desk. How can I help?", "aether", "aether_linesep")
 
         # Replay recent conversation from memory
         for speaker, text, _ts in self.conversation[-10:]:
@@ -229,7 +229,7 @@ class BuilderApp:
         ttk.Button(utility_row, text="Open vault", command=self.open_vault).pack(side="left", padx=(0, 7))
         ttk.Button(utility_row, text="Save to vault", command=self.save_to_vault).pack(side="left", padx=(0, 7))
         ttk.Button(utility_row, text="Clear chat", command=self.clear_chat).pack(side="left", padx=(0, 7))
-        ttk.Button(utility_row, text="Check Ollama", command=self.check_ollama).pack(side="left", padx=(0, 7))
+        ttk.Button(utility_row, text="Check models", command=self.check_models).pack(side="left", padx=(0, 7))
         ttk.Button(utility_row, text="Check updates", command=self.check_updates).pack(side="left")
 
         # Text input
@@ -274,6 +274,11 @@ class BuilderApp:
         bar = ttk.Frame(parent, style="TPanel.TFrame")
         bar.pack(fill="x")
 
+        # The one thing a trading screen must never leave in doubt.
+        self.desk_mode_label = tk.Label(bar, font=("Segoe UI", 11, "bold"), padx=14, pady=6)
+        self._desk_badge(DESK_EXECUTION_MODE)
+        self.desk_mode_label.pack(side="left", padx=(0, 12))
+
         self.desk_start_btn = ttk.Button(bar, text="Start desk", command=self.desk_start,
                                          style="Accent.TButton")
         self.desk_start_btn.pack(side="left", padx=(0, 8))
@@ -290,10 +295,6 @@ class BuilderApp:
             ttk.Checkbutton(bar, text=venue, variable=var,
                             style="TCheckbutton").pack(side="left", padx=(0, 6))
 
-        self.desk_mode_label = ttk.Label(bar, text=f"MODE {DESK_EXECUTION_MODE.upper()}",
-                                         style="TPanel.TLabel", foreground="#ffab40")
-        self.desk_mode_label.pack(side="right")
-
         self.desk_summary = ttk.Label(parent, text="DESK IDLE", style="TPanel.TLabel",
                                       foreground="#9aa7b2", font=("Segoe UI", 10, "bold"))
         self.desk_summary.pack(fill="x", pady=(10, 6))
@@ -303,7 +304,7 @@ class BuilderApp:
         self.desk_metrics = {}
         for column, (key, title, initial, color) in enumerate((
             ("equity", "EQUITY", "—", "#e0e0e0"),
-            ("pnl", "P&L", "—", "#e0e0e0"),
+            ("pnl", "P&L (ALL TIME)", "—", "#e0e0e0"),
             ("positions", "OPEN POSITIONS", "0", "#e0e0e0"),
             ("dial", "RISK DIAL", "0.00", "#4fc3f7"),
             ("record", "CLOSED RECORD", "No trades", "#e0e0e0"),
@@ -324,34 +325,67 @@ class BuilderApp:
                                      foreground="#ffab40", wraplength=760,
                                      justify="left")
 
+        # Equity over every recorded cycle, from the ledger.
+        self.desk_chart = tk.Canvas(parent, height=70, bg="#0f172a", highlightthickness=1,
+                                    highlightbackground="#263449")
+        self.desk_chart.pack(fill="x", pady=(0, 10))
+
+        # What the desk is watching, and what the AI judge has said.
+        panels = ttk.Frame(parent, style="TPanel.TFrame")
+        panels.pack(fill="x", pady=(0, 10))
+        panels.columnconfigure(0, weight=1, uniform="desk_panel")
+        panels.columnconfigure(1, weight=1, uniform="desk_panel")
+        watch_box = ttk.Frame(panels, style="TPanel.TFrame")
+        watch_box.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        ttk.Label(watch_box, text="WATCHLIST — validated rules first", style="TPanel.TLabel",
+                  font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(0, 4))
+        self.desk_watch = ttk.Treeview(watch_box, columns=("symbol", "rule", "status"),
+                                       show="headings", height=6)
+        for column, width in (("symbol", 70), ("rule", 80), ("status", 260)):
+            self.desk_watch.heading(column, text=column.title())
+            self.desk_watch.column(column, width=width, anchor="w", stretch=column == "status")
+        self.desk_watch.tag_configure("ready", foreground="#7dd3fc")
+        self.desk_watch.tag_configure("bought", foreground="#4caf50")
+        self.desk_watch.tag_configure("benched", foreground="#64748b")
+        self.desk_watch.pack(fill="x")
+
+        judge_box = ttk.Frame(panels, style="TPanel.TFrame")
+        judge_box.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+        from desk_view import model_name
+        from config import DESK_BRAIN_MODEL
+        ttk.Label(judge_box, text=f"AI JUDGE — {model_name(DESK_BRAIN_MODEL)}",
+                  style="TPanel.TLabel", font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(0, 4))
+        self.desk_judge = ttk.Treeview(judge_box, columns=("when", "symbol", "verdict", "conf", "note"),
+                                       show="headings", height=6)
+        for column, width in (("when", 90), ("symbol", 60), ("verdict", 60), ("conf", 45), ("note", 160)):
+            self.desk_judge.heading(column, text=column.title())
+            self.desk_judge.column(column, width=width, anchor="w", stretch=column == "note")
+        self.desk_judge.tag_configure("buy", foreground="#4caf50")
+        self.desk_judge.tag_configure("hold", foreground="#fbbf24")
+        self.desk_judge.tag_configure("skip", foreground="#94a3b8")
+        self.desk_judge.pack(fill="x")
+
         ttk.Label(parent, text="OPEN POSITIONS", style="TPanel.TLabel",
                   font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(0, 4))
         table = ttk.Frame(parent, style="TPanel.TFrame")
         table.pack(fill="x")
         columns = ("symbol", "qty", "entry", "mark", "pnl", "stop", "take",
                    "venue", "mode")
-        position_x = ttk.Scrollbar(table, orient="horizontal")
         position_y = ttk.Scrollbar(table, orient="vertical")
-        self.desk_tree = ttk.Treeview(table, columns=columns, show="headings", height=4,
-                                      xscrollcommand=position_x.set,
+        self.desk_tree = ttk.Treeview(table, columns=columns, show="headings", height=3,
                                       yscrollcommand=position_y.set)
-        position_x.configure(command=self.desk_tree.xview)
         position_y.configure(command=self.desk_tree.yview)
+        # Columns stretch to the window, so nothing hides behind a sideways scroll.
         for column in columns:
-            self.desk_tree.heading(column, text=column.title())
-            self.desk_tree.column(column, width=92, minwidth=64, anchor="w", stretch=False)
-        self.desk_tree.column("symbol", width=130)
-        self.desk_tree.column("pnl", width=150)
-        self.desk_tree.column("venue", width=90)
-        self.desk_tree.column("mode", width=80)
+            self.desk_tree.heading(column, text="P&L" if column == "pnl" else column.title())
+            self.desk_tree.column(column, width=70, minwidth=50, anchor="w", stretch=True)
+        self.desk_tree.column("symbol", width=90)
+        self.desk_tree.column("pnl", width=130)
         self.desk_tree.tag_configure("up", foreground="#4caf50")
         self.desk_tree.tag_configure("down", foreground="#ff5252")
         self.desk_tree.tag_configure("empty", foreground="#64748b")
         self.desk_tree.grid(row=0, column=0, sticky="nsew")
-        position_y.configure(command=self.desk_tree.yview)
         position_y.grid(row=0, column=1, sticky="ns")
-        position_x.configure(command=self.desk_tree.xview)
-        position_x.grid(row=1, column=0, sticky="ew")
         table.columnconfigure(0, weight=1)
 
         ttk.Label(parent, text="RECENT DECISIONS", style="TPanel.TLabel",
@@ -380,10 +414,12 @@ class BuilderApp:
         decision_x.grid(row=1, column=0, sticky="ew")
         decisions_frame.columnconfigure(0, weight=1)
 
-        self.desk_log = ChatText(parent, height=10)
+        self.desk_log = ChatText(parent, height=5)
         self.desk_log.pack(fill="both", expand=True, pady=(8, 0))
-        self.desk_log.append("Desk ready. Start runs one cycle; Stop ends after this "
-                             "cycle; PANIC halts and flattens everything.", "meta")
+        self.desk_log.append("Desk ready. Start runs cycles until Stop; PANIC halts and "
+                             "flattens everything. The scheduled task also runs one paper "
+                             "cycle every day at 4:30 pm.", "meta")
+        self.root.after(300, self._desk_ledger_tick)
 
     def desk_start(self) -> None:
         venues = [v for v, var in self.desk_venue_vars.items() if var.get()]
@@ -483,14 +519,92 @@ class BuilderApp:
         self._desk_render(snapshot)
         self._desk_after = self.root.after(800, self._desk_tick)
 
+    def _desk_ledger_tick(self) -> None:
+        """Read the ledger every few seconds: the book is there before Start.
+
+        Equity and P&L always come from here (all-time, every recorded cycle,
+        including the scheduled daily run), not from the in-memory runner,
+        whose P&L restarts with each run.
+        """
+        try:
+            from desk_ledger import connect, open_positions
+            from desk_runner import DEFAULT_VENUES, _row
+            from desk_view import overview
+            from config import DESK_DB, DESK_START_CAPITAL
+            conn = connect(DESK_DB)
+            try:
+                view = overview(conn, DESK_EXECUTION_MODE,
+                                capital=DESK_START_CAPITAL * len(DEFAULT_VENUES))
+                held = [_row(p) for p in open_positions(conn, DESK_EXECUTION_MODE)]
+            finally:
+                conn.close()
+        except Exception as exc:  # noqa: BLE001 — a display aid must not break the app
+            self.desk_summary.configure(text=f"DESK — ledger unreadable: {exc}")
+            view, held = None, []
+        if view is not None:
+            self._desk_render_ledger(view)
+            if self.desk_runner is None:  # before any Start, show the stored book
+                self._desk_render({"positions": held, "mode": DESK_EXECUTION_MODE})
+        self.root.after(5000, self._desk_ledger_tick)
+
+    def _desk_render_ledger(self, view: dict) -> None:
+        equity, start = view.get("equity"), view.get("start_equity")
+        self.desk_metrics["equity"].configure(
+            text=f"${equity:,.2f}" if equity is not None else "—")
+        pnl = (equity - start) if equity is not None and start else None
+        self.desk_metrics["pnl"].configure(
+            text=f"${pnl:+,.2f} ({pnl / start:+.2%})" if pnl is not None else "—",
+            foreground="#4caf50" if (pnl or 0) > 0 else "#ff5252" if (pnl or 0) < 0 else "#e0e0e0")
+
+        self.desk_watch.delete(*self.desk_watch.get_children())
+        for w in view.get("watchlist", []):
+            status = w["status"]
+            tag = "bought" if status in ("BOUGHT", "holding") else "ready" if w["validated"] else "benched"
+            self.desk_watch.insert("", "end", values=(w["symbol"], w["rule"] or "—", status), tags=(tag,))
+        if not view.get("watchlist"):
+            self.desk_watch.insert("", "end", values=("—", "", "Run the desk to scan the universe"))
+
+        self.desk_judge.delete(*self.desk_judge.get_children())
+        for c in view.get("judge_calls", []):
+            when = c["ts"][5:16].replace("T", " ")
+            self.desk_judge.insert("", "end", tags=(c["action"],), values=(
+                when, c["symbol"], c["action"].upper(), f"{c['confidence']:.1f}", c["note"]))
+        if not view.get("judge_calls"):
+            self.desk_judge.insert("", "end", values=(
+                "", "", "", "", "Asked only when a validated rule signals"))
+        self._desk_draw_chart(view.get("series", []))
+
+    def _desk_draw_chart(self, series: list) -> None:
+        canvas = self.desk_chart
+        canvas.delete("all")
+        w, h = max(canvas.winfo_width(), 200), int(canvas["height"])
+        if len(series) < 2:
+            canvas.create_text(w // 2, h // 2, fill="#64748b", font=("Segoe UI", 9),
+                               text="Equity chart — fills in as the desk records cycles")
+            return
+        lo, hi = min(series), max(series)
+        span = (hi - lo) or 1.0
+        step = (w - 20) / (len(series) - 1)
+        points = []
+        for i, value in enumerate(series):
+            points += [10 + i * step, h - 8 - (value - lo) / span * (h - 22)]
+        up = series[-1] >= series[0]
+        canvas.create_line(*points, fill="#4caf50" if up else "#ff5252", width=2, smooth=True)
+        canvas.create_text(12, 8, anchor="nw", fill="#94a3b8", font=("Segoe UI", 8),
+                           text=f"EQUITY  ${lo:,.0f} – ${hi:,.0f}  ·  {len(series)} cycles")
+
+    def _desk_badge(self, label: str) -> None:
+        live = "live" in label
+        self.desk_mode_label.configure(
+            text="● LIVE · REAL MONEY" if live else "● PAPER · simulated money",
+            bg="#b91c1c" if live else "#b45309", fg="#fff7ed")
+
     def _desk_render(self, snapshot: dict) -> None:
         modes = sorted({p.get("mode", "") for p in snapshot.get("positions", [])})
         label = snapshot.get("mode", DESK_EXECUTION_MODE)
         if modes:
             label += " / " + ", ".join(m for m in modes if m)
-        self.desk_mode_label.configure(
-            text=f"MODE {label.upper()}",
-            foreground="#ff5252" if "live" in label else "#ffab40")
+        self._desk_badge(label)
 
         if snapshot.get("halted"):
             heading = "HALTED"
@@ -498,18 +612,11 @@ class BuilderApp:
             heading = "running"
         else:
             heading = "idle"
-        equity = snapshot.get("equity")
         self.desk_summary.configure(
             text=f"DESK {heading.upper()}  ·  {label.upper()}",
             foreground="#ff5252" if snapshot.get("halted") else
             "#00e676" if self._desk_active else "#9aa7b2")
-        self.desk_metrics["equity"].configure(
-            text=f"${equity:,.2f}" if equity is not None else "—")
-        pnl = snapshot.get("pnl")
-        self.desk_metrics["pnl"].configure(
-            text=f"${pnl:+,.2f}" if pnl is not None else "—",
-            foreground="#4caf50" if (pnl or 0) > 0 else
-            "#ff5252" if (pnl or 0) < 0 else "#e0e0e0")
+        # Equity and P&L are drawn from the ledger in _desk_render_ledger.
         self.desk_metrics["positions"].configure(
             text=str(len(snapshot.get("positions", []))))
         self.desk_metrics["dial"].configure(
@@ -896,18 +1003,27 @@ class BuilderApp:
         self.status.configure(text="● Saved to vault", foreground="#00e676")
         self.log_event(f"Saved to vault: {saved_path}")
 
-    def check_ollama(self) -> None:
-        self.status.configure(text="● Checking Ollama...", foreground="#ffab40")
-        self.log_event("Checking Ollama and configured models")
-        threading.Thread(target=self._check_ollama, daemon=True).start()
+    def check_models(self) -> None:
+        self.status.configure(text="● Checking models...", foreground="#ffab40")
+        threading.Thread(target=self._check_models, daemon=True).start()
 
-    def _check_ollama(self) -> None:
-        ok, message = check_server("http://127.0.0.1:11434", list(MODELS.values()))
-        self.root.after(0, lambda: self.finish_ollama_check(ok, message))
+    def _check_models(self) -> None:
+        # Hosted models by default; preflight says which are usable, and Ollama
+        # is only probed for a role that is actually local.
+        from config import DESK_BRAIN_MODEL
+        from desk_view import model_name
+        statuses = preflight()
+        bad = [s for s in statuses if s.status != "ready"]
+        surfaces = ", ".join(sorted({s.surface for s in statuses}))
+        message = (f"Models ready ({len(statuses)} roles on {surfaces}); "
+                   f"trading judge: {model_name(DESK_BRAIN_MODEL)}" if not bad else
+                   f"{len(bad)} model role(s) not ready: " +
+                   "; ".join(f"{s.role} {s.status} — {s.hint}" for s in bad[:3]))
+        self.root.after(0, lambda: self.finish_model_check(not bad, message))
 
-    def finish_ollama_check(self, ok: bool, message: str) -> None:
+    def finish_model_check(self, ok: bool, message: str) -> None:
         self.status.configure(text=("● " + message), foreground="#00e676" if ok else "#ff5252")
-        self.log_event("Ollama check passed" if ok else "Ollama check failed")
+        self.log_event(message)
 
     def check_updates(self) -> None:
         self.status.configure(text="● Checking for updates...", foreground="#007acc")

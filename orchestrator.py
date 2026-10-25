@@ -277,7 +277,7 @@ class Orchestrator:
 
         # Instant replies for common greetings — 0 Ollama calls, instant.
         if any(kw in lowered for kw in ("hi", "hey", "hello")):
-            return "Hi! 👋 How's it going? I'm Aether, your local AI assistant. What would you like to work on today?"
+            return "Hi! 👋 How's it going? I'm Aether, your AI assistant. What would you like to work on today?"
         if "how" in lowered and ("day" in lowered or "you" in lowered):
             return "I'm doing well, thanks! Ready to help you build something. What's on your mind?"
         if "thanks" in lowered or "thank you" in lowered:
@@ -287,7 +287,7 @@ class Orchestrator:
                     "I can also open apps and files, check system info, list folders, "
                     "and run safe shell commands. Everything runs locally on your computer.")
         if "are you there" in lowered or "who are you" in lowered:
-            return "Yes, I'm here. I'm Aether, your local AI assistant running on Ollama."
+            return "Yes, I'm here. I'm Aether, your AI assistant."
         if lowered in {"ok", "okay", "help"}:
             return "I'm here. What would you like to work on?"
 
