@@ -172,9 +172,15 @@ def desk_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
         return connect(paths["db"])
 
     monkeypatch.setattr(desk_runner, "connect", fake_connect)
-    # Marks never hit the network; the fallback (cost basis) is what we want.
-    monkeypatch.setattr(desk_runner.DeskRunner, "_mark",
-                        lambda self, symbol, fallback: fallback)
+    # Marks never hit the network; cost basis is what we want. The exit loop
+    # passes no fallback (a failed mark must skip exits), so look it up.
+    def cost_basis(self, symbol, fallback, venue="stocks"):
+        if fallback is not None:
+            return fallback
+        return next((p.avg_price for v in self.venues
+                     for p in self._broker(v).positions() if p.symbol == symbol), None)
+
+    monkeypatch.setattr(desk_runner.DeskRunner, "_mark", cost_basis)
     return paths
 
 

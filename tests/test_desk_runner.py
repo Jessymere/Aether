@@ -814,3 +814,25 @@ def test_slots_held_at_the_start_are_not_subtracted_twice(desk_env, stub_brain, 
     r.run(cycles=1)                       # 1 slot left: the old code saw 3-2-2 = 0
     held = {p.symbol for p in open_positions(connect(desk_env["db"]))}
     assert held == {"AAA", "BBB", "CCC"}
+
+
+def test_crypto_is_marked_through_dexscreener_by_mint(desk_env, stub_brain, monkeypatch):
+    asked = []
+    monkeypatch.setattr(R.DeskRunner, "_mark", REAL_MARK)
+    monkeypatch.setattr("desk_data.DexScreenerSource.quote", lambda self, q: asked.append(q) or 2.0)
+    monkeypatch.setattr("desk_data.YahooSource.quote", lambda self, q: 999.0)
+    r = runner(desk_env, stub_brain, monkeypatch, venues=["crypto"])
+    r._mints["SOL"] = "So11111111111111111111111111111111111111112"
+    assert r._mark("SOL", None, "crypto") == 2.0
+    assert asked == ["So11111111111111111111111111111111111111112"]
+
+
+def test_a_failed_mark_skips_the_exit_check_instead_of_using_cost(
+        desk_env, stub_brain, monkeypatch, one_candidate):
+    r = runner(desk_env, stub_brain, monkeypatch)
+    r.run(cycles=1)                                       # buy SPY
+    monkeypatch.setattr(R.DeskRunner, "_mark", lambda self, s, f, v="stocks": f)  # quote fails -> None
+    monkeypatch.setattr(R, "should_exit", lambda p, price: "would exit")
+    monkeypatch.setattr(R, "scan", lambda venue, limit, source=None: [])
+    r.run(cycles=1)
+    assert len(open_positions(connect(desk_env["db"]))) == 1   # not sold blind

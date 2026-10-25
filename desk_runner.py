@@ -293,7 +293,7 @@ class DeskRunner:
             for venue in self.venues:
                 broker = self._broker(venue)
                 for position in list(broker.positions()):
-                    price = self._mark(position.symbol, position.avg_price)
+                    price = self._mark(position.symbol, position.avg_price, venue)
                     fill = broker.submit(Order(symbol=position.symbol, side="sell",
                                                qty=position.qty, price=price,
                                                venue=venue, mode=broker.mode,
@@ -320,7 +320,8 @@ class DeskRunner:
             pass
 
     # -- marks --------------------------------------------------------------
-    def _mark(self, symbol: str, fallback: float) -> float:
+    def _mark(self, symbol: str, fallback: Optional[float],
+              venue: str = "stocks") -> Optional[float]:
         """Latest price, cached for a few seconds.
 
         The exit loop and the snapshot both mark the same symbol in one cycle,
@@ -334,7 +335,11 @@ class DeskRunner:
         if hit and now - hit[0] < MARK_CACHE_SECONDS:
             return hit[1]
         try:
-            price = source_for("crypto" if "-USD" in symbol else "stocks").quote(symbol)
+            # By venue, not by "-USD" in the name: a DexScreener token like SOL
+            # was quoted as a Yahoo *stock* ticker. Crypto is quoted by mint
+            # when known, so a same-named token on another chain cannot answer.
+            price = source_for(venue).quote(
+                (self._mints.get(symbol) or symbol) if venue == "crypto" else symbol)
         except (DataUnavailable, Exception):  # noqa: BLE001
             return fallback
         self._mark_cache[symbol] = (now, price)
@@ -504,7 +509,12 @@ class DeskRunner:
                 position.symbol,
                 (position.stop, position.take, position.atr_pct,
                  position.rule_id, position.params))
-            price = self._mark(position.symbol, position.avg_price)
+            price = self._mark(position.symbol, None, venue)
+            if price is None:
+                # Falling back to the entry price made every stop and target
+                # look untouched; better to say so and test it next cycle.
+                self._say(f"{venue}: no price for {position.symbol} — exit checks skipped", "warn")
+                continue
             self._marks[position.symbol] = price
             # Ratchet before testing: a winner that has given back part of its
             # run should die at the trailed stop, not the original one. The

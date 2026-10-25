@@ -28,7 +28,7 @@ import urllib.parse
 import urllib.request
 import zlib
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -284,7 +284,9 @@ class YahooSource:
 
     def bars(self, symbol: str, start: str = "2015-01-01",
              end: Optional[str] = None, use_cache: bool = True) -> list[Bar]:
-        end = end or date.today().isoformat()
+        # period2 is exclusive and midnight UTC: ending at "today" dropped the
+        # current session's bar, so the 4:30 pm run judged yesterday's close.
+        end = end or (datetime.now(timezone.utc).date() + timedelta(days=1)).isoformat()
         query = urllib.parse.urlencode({
             "period1": int(_epoch(start)),
             "period2": int(_epoch(end)),
@@ -299,8 +301,9 @@ class YahooSource:
         return parse_yahoo_chart(payload, symbol)
 
     def quote(self, symbol: str) -> float:
-        """Latest close, for marking positions."""
-        bars = self.bars(symbol, start=_days_ago(10))
+        """Latest close, for marking positions. Never from the 6-hour disk cache:
+        stops were being tested against prices hours old."""
+        bars = self.bars(symbol, start=_days_ago(10), use_cache=False)
         if not bars:
             raise DataUnavailable(f"No bars for {symbol}")
         return bars[-1].close
@@ -330,9 +333,9 @@ class DexScreenerSource:
                            min_liquidity=min_liquidity)[:limit]
 
     def quote(self, symbol_or_address: str) -> float:
-        payload = fetch_json(
+        payload = fetch_json(  # live: a mark from the disk cache can be hours old
             self.SEARCH + urllib.parse.quote(symbol_or_address),
-            bucket=f"dexscreener:{date.today().isoformat()}",
+            bucket=f"dexscreener:{date.today().isoformat()}", use_cache=False,
         )
         pairs = parse_dexscreener_pairs(payload)
         if not pairs:
