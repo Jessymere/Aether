@@ -23,7 +23,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from orchestrator import Orchestrator, CancelledError
 from agents import tester
-from config import (DESK_CYCLE_SECONDS, DESK_EXECUTION_MODE, MEMORY_FILE,
+from config import (DESK_CYCLE_SECONDS, DESK_EXECUTION_MODE, DESK_MAX_POSITIONS, MEMORY_FILE,
                     RUNS, WORKSPACE, VERSION)
 from update import check_for_updates
 from web_research import needs_web, research
@@ -357,56 +357,81 @@ class BuilderApp:
         self.desk_health = Label(parent, text="", text_color=AMBER, wraplength=900,
                                  justify="left", anchor="w")
 
+        # Market clock and the next scheduled paper run: when anything can happen.
+        strip = ctk.CTkFrame(parent, fg_color="transparent")
+        strip.pack(fill="x", padx=4, pady=(0, 8))
+        self.desk_market = Label(strip, text="", corner_radius=12, height=26, padx=12,
+                                 font=("Segoe UI", 11, "bold"))
+        self.desk_market.pack(side="left", padx=(0, 8))
+        self.desk_next_run = Label(strip, text="⏰  Daily paper run: checking…", fg_color=CARD_2,
+                                   corner_radius=12, height=26, padx=12, text_color="#cbd5e1",
+                                   font=("Segoe UI", 11))
+        self.desk_next_run.pack(side="left")
+        self.desk_last_run = Label(strip, text="", text_color=MUTED, font=("Segoe UI", 11))
+        self.desk_last_run.pack(side="right")
+
         metrics = ctk.CTkFrame(parent, fg_color="transparent")
         metrics.pack(fill="x", padx=4, pady=(0, 8))
         self._desk_metrics_row = metrics
-        self.desk_metrics = {}
-        for column, (key, title, initial, color) in enumerate((
-            ("equity", "EQUITY", "—", TEXT),
-            ("pnl", "P&L · ALL TIME", "—", TEXT),
-            ("positions", "OPEN POSITIONS", "0", TEXT),
-            ("dial", "RISK DIAL", "0.00", "#38bdf8"),
-            ("record", "CLOSED RECORD", "No trades", TEXT),
+        self.desk_metrics, self.desk_metric_sub = {}, {}
+        for column, (key, title, initial, color, accent, sub) in enumerate((
+            ("equity", "EQUITY", "—", TEXT, ACCENT, "paper book"),
+            ("pnl", "P&L · ALL TIME", "—", TEXT, GREEN, "since start"),
+            ("positions", "OPEN POSITIONS", "0", TEXT, "#a78bfa", f"of {DESK_MAX_POSITIONS} max"),
+            ("dial", "RISK DIAL", "0.00", "#38bdf8", AMBER, "position size, 0–1"),
+            ("record", "CLOSED RECORD", "No trades", TEXT, "#f472b6", "win rate · trades"),
         )):
             metrics.columnconfigure(column, weight=1, uniform="desk_metric")
             box = card(metrics)
-            box.grid(row=0, column=column, sticky="nsew", padx=(0 if column == 0 else 5, 0))
-            Label(box, text=title, text_color=MUTED, font=("Segoe UI", 10, "bold"),
-                  anchor="w").pack(fill="x", padx=14, pady=(10, 0))
-            value = Label(box, text=initial, text_color=color, font=("Segoe UI", 20, "bold"),
+            box.grid(row=0, column=column, sticky="nsew", padx=(0 if column == 0 else 6, 0))
+            ctk.CTkFrame(box, width=4, height=1, fg_color=accent, corner_radius=2).pack(
+                side="left", fill="y", padx=(8, 0), pady=12)
+            body = ctk.CTkFrame(box, fg_color="transparent")
+            body.pack(side="left", fill="both", expand=True)
+            Label(body, text=title, text_color=MUTED, font=("Segoe UI", 10, "bold"),
+                  anchor="w").pack(fill="x", padx=12, pady=(10, 0))
+            value = Label(body, text=initial, text_color=color, font=("Segoe UI", 21, "bold"),
                           anchor="w")
-            value.pack(fill="x", padx=14, pady=(0, 10))
+            value.pack(fill="x", padx=12)
+            self.desk_metric_sub[key] = Label(body, text=sub, text_color="#64748b",
+                                              font=("Segoe UI", 10), anchor="w")
+            self.desk_metric_sub[key].pack(fill="x", padx=12, pady=(0, 10))
             self.desk_metrics[key] = value
 
         chart_card = card(parent)
         chart_card.pack(fill="x", padx=4, pady=(0, 8))
-        self.desk_chart = tk.Canvas(chart_card, height=56, bg=CARD_2, highlightthickness=0)
+        self.desk_chart = tk.Canvas(chart_card, height=92, bg=CARD_2, highlightthickness=0)
         self.desk_chart.pack(fill="x", padx=10, pady=8)
+        self.desk_chart.bind("<Configure>", lambda _e: self._desk_draw_chart(self._desk_series))
+        self._desk_series, self._desk_capital = [], None
 
         panels = ctk.CTkFrame(parent, fg_color="transparent")
-        panels.pack(fill="x", padx=4, pady=(0, 8))
+        panels.pack(fill="both", expand=True, padx=4, pady=(0, 8))
+        panels.rowconfigure(0, weight=1)
         panels.columnconfigure(0, weight=1, uniform="desk_panel")
         panels.columnconfigure(1, weight=1, uniform="desk_panel")
         watch_box = card(panels)
         watch_box.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
-        heading(watch_box, "👁  WATCHLIST — validated rules first").pack(fill="x", padx=12, pady=(10, 6))
-        self.desk_watch = self._table(watch_box, ("symbol", "rule", "status"),
-                                      {"symbol": 70, "rule": 85, "status": 250}, 5, {"status"},
-                                      {"ready": "#7dd3fc", "bought": GREEN, "benched": "#64748b"})
+        heading(watch_box, "👁  WATCHLIST").pack(fill="x", padx=14, pady=(10, 4))
+        self.desk_watch = ctk.CTkScrollableFrame(watch_box, fg_color="transparent", height=112)
+        self.desk_watch.pack(fill="both", expand=True, padx=6, pady=(0, 8))
         judge_box = card(panels)
         judge_box.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
         from config import DESK_BRAIN_MODEL
         from desk_view import model_name
-        heading(judge_box, f"🤖  AI JUDGE — {model_name(DESK_BRAIN_MODEL)}").pack(fill="x", padx=12, pady=(10, 6))
-        self.desk_judge = self._table(judge_box, ("when", "symbol", "verdict", "conf", "note"),
-                                      {"when": 90, "symbol": 60, "verdict": 65, "conf": 45, "note": 150},
-                                      5, {"note"}, {"buy": GREEN, "hold": AMBER, "skip": MUTED})
+        heading(judge_box, f"🤖  AI JUDGE · {model_name(DESK_BRAIN_MODEL)}").pack(fill="x", padx=14, pady=(10, 4))
+        self.desk_judge = ctk.CTkScrollableFrame(judge_box, fg_color="transparent", height=112)
+        self.desk_judge.pack(fill="both", expand=True, padx=6, pady=(0, 8))
+        self._desk_rows_key = None
 
-        lower = ctk.CTkTabview(parent, fg_color=CARD_2, corner_radius=12, height=150,
+        lower = ctk.CTkTabview(parent, fg_color=CARD_2, corner_radius=12, height=145,
                                segmented_button_selected_color=ACCENT,
                                segmented_button_unselected_color=CARD,
                                segmented_button_fg_color=CARD)
-        lower.pack(fill="both", expand=True, padx=4, pady=(0, 4))
+        # Reserved before the feeds above (pack order), so they shrink and scroll
+        # instead of squeezing positions and the log to nothing.
+        lower.pack(side="bottom", fill="x", padx=4, pady=(0, 4), before=panels)
+        lower.grid_propagate(False)  # keep its own height; contents scroll inside
         self.desk_tree = self._table(
             lower.add("Open positions"),
             ("symbol", "qty", "entry", "mark", "pnl", "stop", "take", "venue", "mode"),
@@ -425,6 +450,7 @@ class BuilderApp:
                              "flattens everything. The scheduled task also runs one paper "
                              "cycle every day at 4:30 pm.", "meta")
         self.root.after(300, self._desk_ledger_tick)
+        self.root.after(500, self._desk_check_schedule)
 
     def desk_start(self) -> None:
         venues = [v for v, var in self.desk_venue_vars.items() if var.get()]
@@ -552,6 +578,24 @@ class BuilderApp:
                 self._desk_render({"positions": held, "mode": DESK_EXECUTION_MODE})
         self.root.after(5000, self._desk_ledger_tick)
 
+    def _desk_check_schedule(self) -> None:
+        """Ask Windows when the 'Aether paper desk' task runs next. Off-thread."""
+        def work() -> None:
+            try:
+                out = subprocess.run(
+                    ["schtasks", "/Query", "/TN", "Aether paper desk", "/FO", "LIST"],
+                    capture_output=True, text=True, timeout=15,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+                nxt = next((line.split(":", 1)[1].strip() for line in out.splitlines()
+                            if line.lower().startswith("next run time")), "")
+                text = (f"⏰  Daily paper run · next {nxt}" if nxt and nxt != "N/A"
+                        else "⏰  Daily paper run: not scheduled")
+            except Exception:  # noqa: BLE001 — a display aid
+                text = "⏰  Daily paper run: unknown"
+            self.root.after(0, lambda: self.desk_next_run.configure(text=text))
+        threading.Thread(target=work, daemon=True).start()
+        self.root.after(600_000, self._desk_check_schedule)
+
     def _desk_render_ledger(self, view: dict) -> None:
         equity, start = view.get("equity"), view.get("start_equity")
         self.desk_metrics["equity"].configure(
@@ -561,42 +605,118 @@ class BuilderApp:
             text=f"${pnl:+,.2f} ({pnl / start:+.2%})" if pnl is not None else "—",
             foreground="#4caf50" if (pnl or 0) > 0 else "#ff5252" if (pnl or 0) < 0 else "#e0e0e0")
 
-        self.desk_watch.delete(*self.desk_watch.get_children())
-        for w in view.get("watchlist", []):
-            status = w["status"]
-            tag = "bought" if status in ("BOUGHT", "holding") else "ready" if w["validated"] else "benched"
-            self.desk_watch.insert("", "end", values=(w["symbol"], w["rule"] or "—", status), tags=(tag,))
-        if not view.get("watchlist"):
-            self.desk_watch.insert("", "end", values=("—", "", "Run the desk to scan the universe"))
+        from datetime import datetime
+        from desk_view import market_status, tone
+        is_open, market = market_status(datetime.now())
+        self.desk_market.configure(text=("●  " if is_open else "○  ") + market,
+                                   fg_color="#14532d" if is_open else CARD_2,
+                                   text_color="#bbf7d0" if is_open else "#cbd5e1")
+        run = view.get("last_run")
+        if run:
+            self.desk_last_run.configure(
+                text=f"Last cycle {run['ts'][5:16].replace('T', ' ')} UTC · scanned "
+                     f"{run['n_candidates']} · cleared gate {run['n_gated']} · filled {run['n_filled']}")
+        self.desk_metric_sub["equity"].configure(
+            text=f"started at ${start:,.0f}" if start else "paper book")
 
-        self.desk_judge.delete(*self.desk_judge.get_children())
-        for c in view.get("judge_calls", []):
-            when = c["ts"][5:16].replace("T", " ")
-            self.desk_judge.insert("", "end", tags=(c["action"],), values=(
-                when, c["symbol"], c["action"].upper(), f"{c['confidence']:.1f}", c["note"]))
-        if not view.get("judge_calls"):
-            self.desk_judge.insert("", "end", values=(
-                "", "", "", "", "Asked only when a validated rule signals"))
-        self._desk_draw_chart(view.get("series", []))
+        # Rows are rebuilt only when what they show changes: no flicker.
+        key = (tuple((w["symbol"], w["status"]) for w in view.get("watchlist", [])),
+               tuple((c["ts"], c["action"]) for c in view.get("judge_calls", [])))
+        if key != self._desk_rows_key:
+            self._desk_rows_key = key
+            self._desk_fill_watch(view.get("watchlist", []), tone)
+            self._desk_fill_judge(view.get("judge_calls", []))
+        self._desk_series, self._desk_capital = view.get("series", []), start
+        self._desk_draw_chart(self._desk_series)
+
+    PILL = {"ready": ("#0c4a6e", "#bae6fd"), "bought": ("#14532d", "#bbf7d0"),
+            "judge": ("#422006", "#fde68a"), "benched": ("#1f2937", "#64748b"),
+            "buy": ("#14532d", "#bbf7d0"), "hold": ("#422006", "#fde68a"),
+            "skip": ("#1f2937", "#94a3b8")}
+
+    def _pill(self, parent, text: str, kind: str) -> Label:
+        bg, fg = self.PILL.get(kind, self.PILL["benched"])
+        return Label(parent, text=text, fg_color=bg, text_color=fg, corner_radius=10,
+                     height=24, padx=10, font=("Segoe UI", 10, "bold"))
+
+    def _desk_fill_watch(self, watch: list, tone) -> None:
+        for child in self.desk_watch.winfo_children():
+            child.destroy()
+        if not watch:
+            Label(self.desk_watch, text="Run the desk to scan the universe",
+                  text_color="#64748b").pack(anchor="w", padx=8, pady=6)
+        for w in watch:
+            kind = tone(w["status"], w["validated"])
+            row = ctk.CTkFrame(self.desk_watch, fg_color=CARD, corner_radius=8)
+            row.pack(fill="x", pady=2, padx=2)
+            Label(row, text=w["symbol"], width=62, anchor="w", font=("Segoe UI", 12, "bold"),
+                  text_color=TEXT if w["validated"] else "#64748b").pack(side="left", padx=(10, 4), pady=3)
+            Label(row, text=w["rule"] or "no rule", fg_color=CARD_2, corner_radius=8, height=22,
+                  padx=8, text_color="#cbd5e1" if w["validated"] else "#64748b",
+                  font=("Segoe UI", 10)).pack(side="left", padx=4)
+            status = w["status"].replace("waiting for ", "waiting · ").replace(" entry signal", "")
+            self._pill(row, status, kind).pack(side="right", padx=8)
+
+    def _desk_fill_judge(self, calls: list) -> None:
+        for child in self.desk_judge.winfo_children():
+            child.destroy()
+        if not calls:
+            Label(self.desk_judge, text="The judge is asked only when a validated rule signals",
+                  text_color="#64748b").pack(anchor="w", padx=8, pady=6)
+        for c in calls:
+            row = ctk.CTkFrame(self.desk_judge, fg_color=CARD, corner_radius=8)
+            row.pack(fill="x", pady=2, padx=2)
+            self._pill(row, c["action"].upper(), c["action"]).pack(side="left", padx=(8, 8), pady=3)
+            Label(row, text=c["symbol"], width=52, anchor="w",
+                  font=("Segoe UI", 12, "bold")).pack(side="left")
+            bar = ctk.CTkProgressBar(row, width=70, height=6, progress_color=self.PILL.get(
+                c["action"], self.PILL["skip"])[1], fg_color=CARD_2)
+            bar.set(max(0.0, min(1.0, c["confidence"])))
+            bar.pack(side="left", padx=(6, 4))
+            Label(row, text=f"{c['confidence']:.0%}", width=34, text_color=MUTED,
+                  font=("Segoe UI", 10)).pack(side="left")
+            Label(row, text=c["ts"][5:16].replace("T", " "), text_color="#64748b",
+                  font=("Segoe UI", 10)).pack(side="right", padx=10)
 
     def _desk_draw_chart(self, series: list) -> None:
         canvas = self.desk_chart
         canvas.delete("all")
-        w, h = max(canvas.winfo_width(), 200), int(canvas["height"])
+        w, h = max(canvas.winfo_width(), 300), int(canvas["height"])
+        left, right, top, bottom = 12, w - 70, 22, h - 12
+        canvas.create_text(left, 4, anchor="nw", fill=MUTED, font=("Segoe UI", 9, "bold"),
+                           text=f"EQUITY · {len(series)} cycles")
         if len(series) < 2:
-            canvas.create_text(w // 2, h // 2, fill="#64748b", font=("Segoe UI", 9),
-                               text="Equity chart — fills in as the desk records cycles")
+            canvas.create_text(w // 2, h // 2, fill="#64748b", font=("Segoe UI", 10),
+                               text="The chart fills in as the desk records cycles")
             return
-        lo, hi = min(series), max(series)
-        span = (hi - lo) or 1.0
-        step = (w - 20) / (len(series) - 1)
-        points = []
-        for i, value in enumerate(series):
-            points += [10 + i * step, h - 8 - (value - lo) / span * (h - 22)]
-        up = series[-1] >= series[0]
-        canvas.create_line(*points, fill="#4caf50" if up else "#ff5252", width=2, smooth=True)
-        canvas.create_text(12, 8, anchor="nw", fill="#94a3b8", font=("Segoe UI", 8),
-                           text=f"EQUITY  ${lo:,.0f} – ${hi:,.0f}  ·  {len(series)} cycles")
+        capital = self._desk_capital
+        lo, hi = min(series + ([capital] if capital else [])), max(series + ([capital] if capital else []))
+        pad = max((hi - lo) * 0.15, abs(hi) * 0.002)  # a flat book still sits mid-chart
+        lo, hi = lo - pad, hi + pad
+        y = lambda v: bottom - (v - lo) / (hi - lo) * (bottom - top)  # noqa: E731
+        for i in range(4):  # grid and price labels
+            value = lo + (hi - lo) * i / 3
+            canvas.create_line(left, y(value), right, y(value), fill="#1e293b")
+            canvas.create_text(right + 8, y(value), anchor="w", fill="#64748b",
+                               font=("Segoe UI", 8), text=f"${value:,.0f}")
+        if capital:
+            canvas.create_line(left, y(capital), right, y(capital), fill="#475569", dash=(4, 4))
+            canvas.create_text(left + 4, y(capital) - 2, anchor="sw", fill="#64748b",
+                               font=("Segoe UI", 8), text="start capital")
+        step = (right - left) / (len(series) - 1)
+        points = [(left + i * step, y(v)) for i, v in enumerate(series)]
+        up = series[-1] >= (capital or series[0])
+        flat = max(series) - min(series) < abs(series[-1]) * 0.0005 and \
+            abs(series[-1] - (capital or series[0])) < abs(series[-1]) * 0.001
+        # Flat reads neutral: a -0.02% book painted red looks like a crash.
+        line, fill = ("#94a3b8", "#1a2333") if flat else (GREEN, "#0f2e1f") if up else (RED, "#2e1215")
+        canvas.create_polygon(left, bottom, *[c for p in points for c in p], right, bottom,
+                              fill=fill, outline="")
+        canvas.create_line(*[c for p in points for c in p], fill=line, width=2)
+        x, last = points[-1]
+        canvas.create_oval(x - 4, last - 4, x + 4, last + 4, fill=line, outline=CARD_2, width=2)
+        canvas.create_text(x - 8, last - 8, anchor="se", fill=TEXT, font=("Segoe UI", 10, "bold"),
+                           text=f"${series[-1]:,.2f}" + ("  · flat" if flat else ""))
 
     def _desk_badge(self, label: str) -> None:
         live = "live" in label

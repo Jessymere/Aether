@@ -49,3 +49,18 @@ def test_pnl_is_measured_against_starting_capital_not_the_first_row(tmp_path):
     view = V.overview(conn, capital=20_000)
     assert view["equity"] - view["start_equity"] == -5
     assert view["series"] == [19_995]          # the one-venue row is left out
+
+
+def test_market_status_knows_open_closed_and_the_weekend():
+    from datetime import datetime
+    assert V.market_status(datetime(2026, 10, 21, 11, 0))[0] is True            # Wed 11:00
+    assert V.market_status(datetime(2026, 10, 21, 8, 0)) == (False, "US market closed · opens 9:30 am")
+    assert V.market_status(datetime(2026, 10, 23, 17, 0)) == (False, "US market closed · opens Mon 9:30 am")
+    assert V.market_status(datetime(2026, 10, 24, 12, 0))[1].endswith("Mon 9:30 am")  # Saturday
+
+
+def test_watchlist_tones():
+    assert V.tone("BOUGHT", True) == "bought"
+    assert V.tone("AI judge passed (skip)", True) == "judge"
+    assert V.tone("waiting for reversion entry signal", True) == "ready"
+    assert V.tone("benched — (stopped at 'fold')", False) == "benched"

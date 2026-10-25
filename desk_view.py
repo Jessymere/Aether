@@ -7,6 +7,7 @@ cycle has run, and poll it while one is running without slowing the desk.
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timedelta
 from typing import Any
 
 from desk_ledger import equity_history
@@ -19,6 +20,33 @@ MODEL_NAMES = {
 
 #: Decisions made by code, not by the judge.
 _NOT_THE_JUDGE = ("", "gate", "stub", "cache")
+
+
+def market_status(now: datetime) -> tuple[bool, str]:
+    """``(open, text)`` for the US stock market at local ``now``.
+
+    shortcut: assumes this PC runs on US Eastern time and ignores exchange
+    holidays; use an exchange calendar if the desk moves or trades holidays.
+    """
+    minutes = now.hour * 60 + now.minute
+    if now.weekday() < 5 and 9 * 60 + 30 <= minutes < 16 * 60:
+        return True, "US market open · closes 4:00 pm"
+    days = 1
+    while (now + timedelta(days=days)).weekday() >= 5:
+        days += 1
+    if now.weekday() < 5 and minutes < 9 * 60 + 30:
+        return False, "US market closed · opens 9:30 am"
+    nxt = (now + timedelta(days=days)).strftime("%a")
+    return False, f"US market closed · opens {nxt} 9:30 am"
+
+
+def tone(status: str, validated: bool) -> str:
+    """Pill colour key for a watchlist status: bought, ready, judge or benched."""
+    if status in ("BOUGHT", "holding"):
+        return "bought"
+    if status.startswith("AI judge"):
+        return "judge"
+    return "ready" if validated else "benched"
 
 
 def model_name(slug: str) -> str:
