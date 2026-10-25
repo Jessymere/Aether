@@ -126,6 +126,24 @@ def test_a_running_market_passes_the_gate():
     assert {v.verdict for v in verdicts} >= {"train", "holdout", "degradation"}
 
 
+def test_a_rule_that_earns_less_than_holding_is_benched_at_benchmark():
+    # A gentle wave on a drift clears train, folds, holdout and degradation,
+    # but simply holding it earns more, so the desk should just hold.
+    passed, verdicts = evaluate("GENTLE", wavy(amp=0.02, period=2.0), B.RULES["ma_cross"])
+    assert passed is False
+    assert all(v.passed for v in verdicts if v.verdict != "benchmark")
+    bench = next(v for v in verdicts if v.verdict == "benchmark")
+    assert bench.passed is False
+    assert bench.metrics["rule_return"] <= bench.metrics["buy_and_hold"]
+
+
+def test_buy_and_hold_charges_costs_on_both_legs():
+    flat = [Bar(ts=f"t{i}", open=100, high=100, low=100, close=100) for i in range(5)]
+    assert B.buy_and_hold(flat, fees_bps=0, slippage_bps=0) == 0
+    expected = (1 - 0.003) / (1 + 0.003) - 1  # 10 bps fees + 20 bps slippage each way
+    assert abs(B.buy_and_hold(flat, fees_bps=10, slippage_bps=20) - expected) < 1e-12
+
+
 def test_verdicts_are_returned_even_on_success():
     passed, verdicts = evaluate("TREND", wavy(), B.RULES["ma_cross"])
     assert verdicts and all(isinstance(v.metrics, dict) for v in verdicts)

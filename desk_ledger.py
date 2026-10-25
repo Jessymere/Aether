@@ -224,7 +224,7 @@ class Verdict:
     """One walk-forward verdict. ``passed`` False benches the rule."""
 
     rule_id: str
-    verdict: str  # "train" | "folds" | "holdout" | "degradation"
+    verdict: str  # "train" | "folds" | "holdout" | "degradation" | "benchmark"
     symbol: str = ""
     window: str = ""
     n_trades: int = 0

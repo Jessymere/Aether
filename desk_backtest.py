@@ -12,6 +12,8 @@ verdicts on years it never saw:
     V3 holdout   -- the frozen rule on years untouched until now, at the
                     strictest bar
     degradation  -- train-vs-holdout expectancy must not collapse
+    benchmark    -- on the holdout the rule must out-earn buying on day one and
+                    holding, at the same costs; otherwise just hold
 
 Any failure benches the rule. A benched rule is *quarantined, not deleted*:
 the verdict rows are written either way, with full metrics, so the log can
@@ -453,7 +455,22 @@ def evaluate(symbol: str, bars: list[Bar], rule: Rule) -> tuple[bool, list[Verdi
                                      "limit": DESK_MAX_DEGRADATION},
     ))
 
+    rule_return = hold.ending_equity / hold.starting_equity - 1
+    hold_return = buy_and_hold(holdout)
+    verdicts.append(Verdict(
+        rule_id=rule.rule_id, symbol=symbol, verdict="benchmark",
+        passed=rule_return > hold_return, window=f"{holdout[0].ts}..{holdout[-1].ts}",
+        metrics={"rule_return": round(rule_return, 4), "buy_and_hold": round(hold_return, 4)},
+    ))
+
     return all(v.passed for v in verdicts), verdicts
+
+
+def buy_and_hold(bars: list[Bar], *, fees_bps: float = DESK_FEES_BPS,
+                 slippage_bps: float = DESK_SLIPPAGE_BPS) -> float:
+    """Return of buying the first open and selling the last close, costs on both legs like ``replay``."""
+    cost = (fees_bps + slippage_bps) / 10_000.0
+    return bars[-1].close * (1 - cost) / (bars[0].open * (1 + cost)) - 1
 
 
 def gate_symbol(symbol: str, bars: list[Bar],
@@ -474,8 +491,8 @@ def _first_failure(verdicts: list[Verdict]) -> str:
     return "benched"
 
 
-def synthetic_bars(n: int = 3650, *, drift: float = 0.0005, amp: float = 0.02,
-                   period: float = 2.0, start: str = "2015-01-01") -> list[Bar]:
+def synthetic_bars(n: int = 3650, *, drift: float = 0.0005, amp: float = 0.15,
+                   period: float = 15.0, start: str = "2015-01-01") -> list[Bar]:
     """A deterministic, market-shaped series for the offline self-test.
 
     Two properties matter, and both were learned the hard way:
@@ -487,6 +504,9 @@ def synthetic_bars(n: int = 3650, *, drift: float = 0.0005, amp: float = 0.02,
       * **Dates that actually span the calendar split's years.** Timestamps
         that stop in 2018 leave the validate and holdout windows empty, and
         the gate silently falls back to a proportional split.
+      * **Swings big enough that timing beats holding.** The benchmark verdict
+        benches any rule that earns less than buy-and-hold, and a gentle wave
+        on a drift is always better simply held.
     """
     from datetime import date, timedelta
 
