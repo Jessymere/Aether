@@ -322,7 +322,7 @@ class BuilderApp:
     # ------------------------------------------------------------------ Research
     #
     # Shows desk/research/*.json, written by desk_forward, desk_replay and
-    # desk_rotation. The buttons re-run them off-thread; the tab never fetches.
+    # desk_rotation (strategies.json). The button re-runs them off-thread; the tab never fetches.
     def _build_research_tab(self, parent) -> None:
         bar = ctk.CTkFrame(parent, fg_color="transparent")
         bar.pack(fill="x", padx=4, pady=(4, 8))
@@ -340,7 +340,7 @@ class BuilderApp:
         self.research_cards = {}
         for column, (key, title) in enumerate((("replay", "DESK REPLAY vs SPY"),
                                                ("forward", "FORWARD TEST"),
-                                               ("rotation", "SECTOR ROTATION"))):
+                                               ("strategies", "PORTFOLIO STRATEGIES"))):
             cards.columnconfigure(column, weight=1, uniform="research")
             box = card(cards)
             box.grid(row=0, column=column, sticky="nsew", padx=(0 if column == 0 else 6, 0))
@@ -381,14 +381,16 @@ class BuilderApp:
             except (OSError, ValueError):
                 return None
 
-        replay, forward, rotation = read("replay.json"), read("forward.json"), read("rotation.json")
+        replay, forward, strategies = read("replay.json"), read("forward.json"), read("strategies.json")
         verdict, detail = self.research_cards["replay"]
         if replay:
             ahead = replay["return"] > replay["hold_return"]
             verdict.configure(text=f"{replay['return']:+.1%}  vs  {replay['hold_return']:+.1%}",
                               text_color=GREEN if ahead else RED)
             detail.configure(text=f"Max drawdown {replay['drawdown']:.1%} vs {replay['hold_drawdown']:.1%} · "
-                                  f"{len(replay['trades'])} trades from {replay['start']} · rules only, judge excluded")
+                                  f"{len(replay['trades'])} trades from {replay['start']} · rules only, judge excluded"
+                                  + "".join(f"\nat {s['pct']:.0f}% a position: {s['return']:+.1%}, dd {s['drawdown']:.1%}"
+                                            for s in replay.get("sizing", [])[1:]))
         else:
             verdict.configure(text="not run yet", text_color=MUTED)
         self._research_replay = replay
@@ -411,13 +413,15 @@ class BuilderApp:
         else:
             verdict.configure(text="not run yet", text_color=MUTED)
 
-        verdict, detail = self.research_cards["rotation"]
-        if rotation:
-            verdict.configure(text="passes" if rotation["passed"] else "research only",
-                              text_color=GREEN if rotation["passed"] else AMBER)
-            detail.configure(text="  ·  ".join(
-                f"{label}: {w['return']:+.1%} vs SPY {w['spy']:+.1%}"
-                for label, w in rotation["windows"].items()))
+        verdict, detail = self.research_cards["strategies"]
+        if strategies:
+            passed = sum(s["passed"] for s in strategies.values())
+            verdict.configure(text=f"{passed} of {len(strategies)} pass both windows",
+                              text_color=GREEN if passed else AMBER)
+            detail.configure(text="\n".join(
+                f"{name}: " + "  ·  ".join(f"{label.split()[0]} {w['return']:+.1%} vs {w['spy']:+.1%}"
+                                          for label, w in s["windows"].items())
+                for name, s in strategies.items()))
         else:
             verdict.configure(text="not run yet", text_color=MUTED)
 
