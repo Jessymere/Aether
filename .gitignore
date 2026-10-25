@@ -38,3 +38,7 @@ vault/conversation-summary.md
 work/
 _probe_*.py
 
+
+# Kronos forecaster: third-party code and weights, run from training/.venv
+kronos/
+
