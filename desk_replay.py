@@ -23,6 +23,9 @@ import desk_backtest as B
 from config import (DESK_HOLDOUT, DESK_MAX_PER_SECTOR, DESK_SECTORS, DESK_START_CAPITAL,
                     DESK_UNIVERSE, desk_costs)
 from desk_forward import FORWARD_START, RESEARCH_DIR
+
+#: Position sizes the sweep tries, in % of equity per position.
+SIZES = (10, 20, 35, 50, 100)
 from desk_ledger import Position
 from desk_seats import (atr_pct, chief_budget, compute_dial, should_exit, size_position,
                         stop_and_take, trail_stop)
@@ -31,7 +34,7 @@ from desk_seats import (atr_pct, chief_budget, compute_dial, should_exit, size_p
 def simulate(rules: dict[str, tuple[B.Rule, dict]], data: dict[str, list], *,
              start: str = FORWARD_START, capital: float = DESK_START_CAPITAL,
              costs: tuple[float, float] = (3.0, 3.0), benchmark: str = "SPY",
-             confidence: float = 0.6) -> dict[str, Any]:
+             confidence: float = 0.6, max_position_pct: float | None = None) -> dict[str, Any]:
     """The day loop. ``data`` must include ``benchmark`` (it sets the dial and
     the calendar). Pure: no network, so tests drive it with synthetic bars."""
     cost = sum(costs) / 10_000
@@ -52,7 +55,7 @@ def simulate(rules: dict[str, tuple[B.Rule, dict]], data: dict[str, list], *,
             if sum(DESK_SECTORS.get(x, x) == sector for x in held) >= DESK_MAX_PER_SECTOR:
                 continue
             dial = compute_dial(data[benchmark][:index[benchmark][day]])
-            budget = chief_budget(mark(day), cash, dial, len(held))
+            budget = chief_budget(mark(day), cash, dial, len(held), max_pct=max_position_pct)
             rng = atr_pct(data[s][:i])
             price = data[s][i].open * (1 + cost)
             qty = size_position(budget.per_position, price, confidence, rng)
@@ -113,6 +116,12 @@ def run(symbols: list[str]) -> dict[str, Any]:
                 break
         data[s] = src.bars(s, start="2023-06-01")
     report = simulate(rules, data, costs=costs)
+    # The same data at other position sizes: the desk is mostly cash at 10%.
+    report["sizing"] = [
+        {"pct": pct, **{k: r[k] for k in ("return", "drawdown", "hold_return", "hold_drawdown")},
+         "trades": len(r["trades"])}
+        for pct, r in ((pct, simulate(rules, data, costs=costs, max_position_pct=pct))
+                       for pct in SIZES)]
     RESEARCH_DIR.mkdir(parents=True, exist_ok=True)
     (RESEARCH_DIR / "replay.json").write_text(json.dumps(report, indent=1), encoding="utf-8")
     return report
@@ -126,6 +135,11 @@ def main(argv: list[str]) -> None:
     print(f"desk : {r['return']:+.1%}  max drawdown {r['drawdown']:.1%}  trades {len(r['trades'])}"
           + (f"  win rate {wins / len(r['trades']):.0%}" if r["trades"] else ""))
     print(f"SPY  : {r['hold_return']:+.1%}  max drawdown {r['hold_drawdown']:.1%}")
+    print("\nposition size sweep (% of equity per position, before dial and range cuts):")
+    for s in r["sizing"]:
+        ratio = s["return"] / max(s["drawdown"], 0.02)
+        print(f"  {s['pct']:5.0f}%  desk {s['return']:+7.1%}  dd {s['drawdown']:5.1%}  "
+              f"return/dd {ratio:5.2f}   (SPY {s['hold_return'] / max(s['hold_drawdown'], 0.02):.2f})")
 
 
 if __name__ == "__main__":

@@ -198,13 +198,14 @@ class Budget:
 
 
 def chief_budget(equity: float, cash: float, dial: Dial,
-                 open_count: int) -> Budget:
+                 open_count: int, max_pct: Optional[float] = None) -> Budget:
     """Split capital into per-position budget. Pure arithmetic, no judgement.
 
     The risk ceiling is applied here, not by a model: a single position can
-    never exceed ``DESK_MAX_POSITION_PCT`` of equity, scaled by the dial.
+    never exceed ``DESK_MAX_POSITION_PCT`` of equity (or ``max_pct``, which the
+    replay's sizing sweep passes), scaled by the dial.
     """
-    pct = max(0.0, DESK_MAX_POSITION_PCT) / 100.0
+    pct = max(0.0, DESK_MAX_POSITION_PCT if max_pct is None else max_pct) / 100.0
     ceiling = equity * pct
     per_position = max(0.0, min(ceiling, cash) * dial.value)
     slots = max(0, DESK_MAX_POSITIONS - open_count)

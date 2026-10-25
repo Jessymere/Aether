@@ -172,6 +172,29 @@ def _trend_exit(closes: list[float], p: dict) -> bool:
     return closes[-1] < sum(closes[-window:]) / window * (1 - band)
 
 
+def _rsi(closes: list[float], period: int) -> float:
+    """Wilder-free simple RSI over the last ``period`` changes (Connors uses 2)."""
+    changes = [b - a for a, b in zip(closes[-period - 1:-1], closes[-period:])]
+    gain = sum(c for c in changes if c > 0)
+    loss = -sum(c for c in changes if c < 0)
+    return 100.0 if loss == 0 else 100 - 100 / (1 + gain / loss)
+
+
+def _rsi2_entry(closes: list[float], p: dict) -> bool:
+    """Connors RSI(2): a sharp short-term dip inside a long-term uptrend."""
+    trend, level = p.get("trend", 200), p.get("level", 10)
+    if len(closes) < trend + 1:
+        return False
+    return closes[-1] > sum(closes[-trend:]) / trend and _rsi(closes, 2) < level
+
+
+def _rsi2_exit(closes: list[float], p: dict) -> bool:
+    exit_ma = p.get("exit_ma", 5)
+    if len(closes) < exit_ma:
+        return False
+    return closes[-1] > sum(closes[-exit_ma:]) / exit_ma
+
+
 RULES: dict[str, Rule] = {
     "ma_cross": Rule(
         rule_id="ma_cross", entry=_ma_cross_entry, exit=_ma_cross_exit,
@@ -194,6 +217,13 @@ RULES: dict[str, Rule] = {
         rule_id="trend", entry=_trend_entry, exit=_trend_exit,
         grid=[{"window": w, "band": b} for w in (100, 200) for b in (0.0, 0.02)],
         description="Hold while price is above its long average (with a band), cash below it.",
+    ),
+    "rsi2": Rule(
+        rule_id="rsi2", entry=_rsi2_entry, exit=_rsi2_exit,
+        # Connors' published settings, not a search: RSI(2) under 5 or 10 above
+        # the 200-day average, out when price closes back above the 5-day.
+        grid=[{"trend": 200, "level": lvl, "exit_ma": 5} for lvl in (5, 10)],
+        description="Buy a 2-day RSI washout inside a 200-day uptrend; exit above the 5-day mean.",
     ),
 }
 

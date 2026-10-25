@@ -72,3 +72,34 @@ def test_rotation_holds_the_strongest_sectors_and_goes_to_cash_when_all_fall():
              "B": daily([100.0 * 0.997 ** i for i in range(700)], symbol="B")}
     r = ROT.rotate(crash, "2024-06-01", top=1, cost_bps=0)
     assert r["return"] == 0                                    # nothing positive: cash
+
+
+def test_dual_momentum_holds_stocks_in_a_bull_and_bonds_in_a_bear():
+    import desk_rotation as ROT
+    n = 900
+    bull = {"SPY": daily([100 * 1.001 ** i for i in range(n)], symbol="SPY"),
+            "BIL": daily([100 * 1.0001 ** i for i in range(n)], symbol="BIL"),
+            "AGG": daily([100.0] * n, symbol="AGG")}
+    w = ROT.dual_momentum()({s: {b.ts: b.close for b in v} for s, v in bull.items()},
+                            [b.ts for b in bull["SPY"]], 800)
+    assert w == {"SPY": 1.0}
+    bear = dict(bull, SPY=daily([100 * 0.999 ** i for i in range(n)], symbol="SPY"))
+    w = ROT.dual_momentum()({s: {b.ts: b.close for b in v} for s, v in bear.items()},
+                            [b.ts for b in bear["SPY"]], 800)
+    assert w == {"AGG": 1.0}
+
+
+def test_vol_target_sizes_down_when_spy_is_wild():
+    import desk_rotation as ROT
+    calm = [100 * (1 + 0.001 * (-1) ** i) for i in range(30)]
+    wild = [100 * (1 + 0.05 * (-1) ** i) for i in range(30)]
+    cal = [f"d{i:02d}" for i in range(30)]
+    assert ROT.vol_target()({"SPY": dict(zip(cal, calm))}, cal, 29)["SPY"] == 1.0
+    assert ROT.vol_target()({"SPY": dict(zip(cal, wild))}, cal, 29)["SPY"] < 0.2
+
+
+def test_chief_budget_takes_a_position_size_override():
+    from desk_seats import Dial, chief_budget
+    base = chief_budget(10_000, 10_000, Dial(1.0, "t"), 0)
+    wide = chief_budget(10_000, 10_000, Dial(1.0, "t"), 0, max_pct=50)
+    assert round(wide.per_position) == 5_000 and wide.per_position > base.per_position

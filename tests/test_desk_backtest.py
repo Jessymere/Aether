@@ -203,3 +203,14 @@ def test_trend_holds_above_the_average_and_exits_below_the_band():
     flat = [100.0] * 200
     assert not B.RULES["trend"].exit(flat[:-1] + [99.0], {"window": 200, "band": 0.02})  # inside the band
     assert B.RULES["trend"].exit(flat[:-1] + [97.0], {"window": 200, "band": 0.02})
+
+
+def test_rsi2_buys_a_dip_in_an_uptrend_and_exits_on_the_bounce():
+    rising = [100.0 + i * 0.5 for i in range(250)]
+    dip = rising + [rising[-1] - 3, rising[-1] - 6]            # two sharp down days
+    assert B._rsi(dip, 2) == 0.0
+    assert B.RULES["rsi2"].entry(dip, {"trend": 200, "level": 10})
+    assert not B.RULES["rsi2"].entry(rising, {"trend": 200, "level": 10})   # no dip
+    falling = [200.0 - i * 0.5 for i in range(250)]
+    assert not B.RULES["rsi2"].entry(falling + [falling[-1] - 5], {"trend": 200, "level": 10})  # downtrend
+    assert B.RULES["rsi2"].exit(dip + [rising[-1] + 5], {"exit_ma": 5})
