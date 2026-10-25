@@ -37,6 +37,7 @@ from config import (
     DESK_RECORD_WINDOW,
     DESK_RECORD_WIN_FLOOR,
     DESK_START_CAPITAL,
+    desk_costs,
 )
 from desk_broker import Order, PaperBroker, make_broker
 from desk_data import Candidate, DataUnavailable
@@ -460,7 +461,7 @@ class DeskRunner:
             if rule.rule_id in blocked:
                 reason = "benched"
                 continue
-            ok, verdicts = evaluate(cand.symbol, bars, rule)
+            ok, verdicts = evaluate(cand.symbol, bars, rule, costs=desk_costs(cand.venue))
             for verdict in verdicts:
                 record_verdict(self.conn, verdict)
             if ok:

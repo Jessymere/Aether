@@ -608,7 +608,7 @@ def test_a_stood_down_rule_is_never_evaluated(desk_env, stub_brain, monkeypatch)
     seed_rule(connect(desk_env["db"]), "ma_cross")
     seen = []
 
-    def evaluate(symbol, bars, rule):
+    def evaluate(symbol, bars, rule, costs=None):
         seen.append(rule.rule_id)
         return True, []
 

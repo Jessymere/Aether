@@ -144,6 +144,13 @@ def test_buy_and_hold_charges_costs_on_both_legs():
     assert abs(B.buy_and_hold(flat, fees_bps=10, slippage_bps=20) - expected) < 1e-12
 
 
+def test_the_gate_charges_the_costs_it_is_given():
+    cheap = evaluate("TREND", wavy(), B.RULES["ma_cross"], costs=(0.0, 0.0))[1]
+    dear = evaluate("TREND", wavy(), B.RULES["ma_cross"], costs=(50.0, 100.0))[1]
+    train = lambda vs: next(v for v in vs if v.verdict == "train")
+    assert train(dear).expectancy < train(cheap).expectancy
+
+
 def test_verdicts_are_returned_even_on_success():
     passed, verdicts = evaluate("TREND", wavy(), B.RULES["ma_cross"])
     assert verdicts and all(isinstance(v.metrics, dict) for v in verdicts)

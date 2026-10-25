@@ -374,8 +374,14 @@ def _better(candidate: Metrics, incumbent: Metrics, min_trades: int = DESK_MIN_T
     return candidate.n_trades > incumbent.n_trades
 
 
-def evaluate(symbol: str, bars: list[Bar], rule: Rule) -> tuple[bool, list[Verdict]]:
-    """Run all verdicts. Returns (passed, verdicts) — verdicts always returned."""
+def evaluate(symbol: str, bars: list[Bar], rule: Rule, *,
+             costs: Optional[tuple[float, float]] = None) -> tuple[bool, list[Verdict]]:
+    """Run all verdicts. Returns (passed, verdicts) — verdicts always returned.
+
+    ``costs`` is ``(fees_bps, slippage_bps)``; pass ``config.desk_costs(venue)``
+    so the gate charges what the book will. Omitted, the flat defaults apply.
+    """
+    fees, slippage = costs or (DESK_FEES_BPS, DESK_SLIPPAGE_BPS)
     verdicts: list[Verdict] = []
 
     if len(bars) < MIN_BARS_TO_TRADE:
@@ -397,7 +403,7 @@ def evaluate(symbol: str, bars: list[Bar], rule: Rule) -> tuple[bool, list[Verdi
     best_params, best = None, None
     floor = trades_floor(len(train))
     for params in (rule.grid or [{}]):
-        m = replay(train, rule, params)
+        m = replay(train, rule, params, fees_bps=fees, slippage_bps=slippage)
         if best is None or _better(m, best, floor):
             best_params, best = params, m
     assert best is not None and best_params is not None
@@ -417,7 +423,7 @@ def evaluate(symbol: str, bars: list[Bar], rule: Rule) -> tuple[bool, list[Verdi
     all_folds = bool(folds)
     rate = best.n_trades / len(train) if train else 0.0
     for index, window in enumerate(folds):
-        m = replay(window, rule, best_params)
+        m = replay(window, rule, best_params, fees_bps=fees, slippage_bps=slippage)
         ok, checks = pass_criteria(m, min_trades=fold_trades_floor(len(window), rate))
         all_folds = all_folds and ok
         verdicts.append(Verdict(
@@ -431,7 +437,7 @@ def evaluate(symbol: str, bars: list[Bar], rule: Rule) -> tuple[bool, list[Verdi
         return False, verdicts
 
     # V3 — the holdout years, never touched until now.
-    hold = replay(holdout, rule, best_params)
+    hold = replay(holdout, rule, best_params, fees_bps=fees, slippage_bps=slippage)
     v3_ok, v3_checks = pass_criteria(hold, trades_floor(len(holdout)))
     verdicts.append(Verdict(
         rule_id=rule.rule_id, symbol=symbol, verdict="holdout", passed=v3_ok,
@@ -456,7 +462,7 @@ def evaluate(symbol: str, bars: list[Bar], rule: Rule) -> tuple[bool, list[Verdi
     ))
 
     rule_return = hold.ending_equity / hold.starting_equity - 1
-    hold_return = buy_and_hold(holdout)
+    hold_return = buy_and_hold(holdout, fees_bps=fees, slippage_bps=slippage)
     verdicts.append(Verdict(
         rule_id=rule.rule_id, symbol=symbol, verdict="benchmark",
         passed=rule_return > hold_return, window=f"{holdout[0].ts}..{holdout[-1].ts}",
