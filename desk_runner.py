@@ -650,7 +650,7 @@ class DeskRunner:
                                        price=cand.price, venue=venue,
                                        mode=broker.mode, mint=cand.mint))
             if not fill:
-                self._skip(cand, candidate_id, "broker refused (cash or size)",
+                self._skip(cand, candidate_id, getattr(broker, "last_error", "") or "broker refused (cash or size)",
                            "broker", result, decision=decision)
                 continue
 

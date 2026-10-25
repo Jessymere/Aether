@@ -25,7 +25,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Optional, Protocol
 
 from config import (
@@ -669,6 +669,19 @@ class RobinhoodBroker:
             ))
         return out
 
+    def quote(self, symbol: str, side: str = "buy") -> float:
+        """Executable price for ``side``: the spread-inclusive ask to buy, bid to sell."""
+        pair = symbol if "-" in symbol else f"{symbol}-USD"
+        rows = self._rows(self._call(f"/api/v1/crypto/marketdata/best_bid_ask/?symbol={pair}"))
+        if not rows:
+            raise BrokerError(f"Robinhood has no quote for {pair}")
+        row = rows[0]
+        key = "ask_inclusive_of_buy_spread" if side == "buy" else "bid_inclusive_of_sell_spread"
+        price = _float(row.get(key)) or _float(row.get("price"))
+        if price <= 0:
+            raise BrokerError(f"Robinhood quote for {pair} has no usable price")
+        return price
+
     # -- write --------------------------------------------------------------
     def submit(self, order: Order) -> Optional[Fill]:
         if order.qty <= 0:
@@ -717,6 +730,36 @@ def _float(value: Any, fallback: float = 0.0) -> float:
         return fallback
 
 
+@dataclass
+class ShadowBroker(PaperBroker):
+    """Real Robinhood reads, simulated orders: the live path without the money.
+
+    Every order first asks Robinhood for the pair's executable price over the
+    signed API — so the keys, the signature and the symbol format are all
+    exercised on the wire — then fills on this paper book at that price. The
+    order endpoint is never called. Fills are recorded as mode ``shadow``,
+    apart from paper and live.
+    """
+
+    name: str = "robinhood-shadow"
+    mode: str = "shadow"
+    live: Any = None
+    last_error: str = ""
+
+    def submit(self, order: Order) -> Optional[Fill]:
+        try:
+            price = self.live.quote(order.symbol, order.side)
+        except BrokerError as exc:
+            self.last_error = str(exc)  # the live path would have failed here too
+            return None
+        # The quote already includes Robinhood's spread, so no extra slippage.
+        saved, self.slippage_bps = self.slippage_bps, 0.0
+        try:
+            return PaperBroker.submit(self, replace(order, price=price))
+        finally:
+            self.slippage_bps = saved
+
+
 # ---------------------------------------------------------------------------
 def make_broker(venue: str, mode: str = "paper", *, starting_cash: float = 10_000.0):
     """Pick a broker, degrading to paper when credentials are missing.
@@ -742,6 +785,11 @@ def make_broker(venue: str, mode: str = "paper", *, starting_cash: float = 10_00
         if broker.can_trade:
             return broker
         return paper()
+    if venue == "crypto" and mode == "shadow" and DESK_CRYPTO_BROKER == "robinhood":
+        live = RobinhoodBroker(mode="shadow")
+        if live.can_trade:
+            return ShadowBroker(starting_cash=starting_cash, fees_bps=fees,
+                                slippage_bps=slippage, live=live)
     return paper()
 
 

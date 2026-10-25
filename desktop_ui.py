@@ -875,12 +875,12 @@ class BuilderApp:
                            text=f"${series[-1]:,.2f}" + ("  · flat" if flat else ""))
 
     def _desk_badge(self, label: str) -> None:
-        live = "live" in label
-        for widget, text in ((self.desk_mode_label,
-                              "● LIVE · REAL MONEY" if live else "● PAPER · simulated money"),
-                             (self.header_mode, "● LIVE" if live else "● PAPER")):
-            widget.configure(text=text, fg_color="#b91c1c" if live else "#b45309",
-                             text_color="#fff7ed")
+        live, shadow = "live" in label, "shadow" in label
+        long, short, color = (("● LIVE · REAL MONEY", "● LIVE", "#b91c1c") if live else
+                              ("● SHADOW · real data, simulated orders", "● SHADOW", "#6d28d9") if shadow else
+                              ("● PAPER · simulated money", "● PAPER", "#b45309"))
+        for widget, text in ((self.desk_mode_label, long), (self.header_mode, short)):
+            widget.configure(text=text, fg_color=color, text_color="#fff7ed")
 
     def _desk_render(self, snapshot: dict) -> None:
         modes = sorted({p.get("mode", "") for p in snapshot.get("positions", [])})
