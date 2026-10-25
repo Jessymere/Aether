@@ -175,3 +175,31 @@ def test_every_rule_has_a_grid_and_pure_functions():
         assert rule.grid and rule.description
         assert rule.entry([100.0] * 300, rule.grid[0]) in (True, False)
         assert rule.exit([100.0] * 300, rule.grid[0]) in (True, False)
+
+
+def test_benchmark_accepts_less_return_for_much_less_drawdown():
+    assert B.beats_benchmark(0.30, 0.10, 0.20, 0.30)[0]                 # simply out-earned
+    ok, why = B.beats_benchmark(0.10, 0.05, 0.20, 0.35)                 # 2.0 per dd vs 0.57
+    assert ok and "per drawdown" in why
+    assert not B.beats_benchmark(0.10, 0.20, 0.20, 0.25)[0]             # 0.5 vs 0.8
+    assert not B.beats_benchmark(-0.01, 0.01, 0.20, 0.40)[0]            # the second door needs a profit
+    assert not B.beats_benchmark(0.01, 0.0, 0.20, 0.30)[0]              # 0.5 (dd floored) vs 0.67
+
+
+def test_mark_to_market_drawdown_sees_an_open_losing_trade():
+    always = B.Rule(rule_id="always", entry=lambda c, p: True, exit=lambda c, p: False, grid=[{}])
+    path = [100, 100, 100, 60, 70, 100, 100]
+    bars = [Bar(ts=f"t{i}", open=c, high=c, low=c, close=c) for i, c in enumerate(path)]
+    m = B.replay(bars, always, {}, fees_bps=0, slippage_bps=0)
+    assert m.max_dd == 0.0                 # no trade closed during the fall
+    assert round(m.mtm_dd, 2) == 0.40      # but the book was down 40%
+    assert round(B.hold_drawdown(bars), 2) == 0.40
+
+
+def test_trend_holds_above_the_average_and_exits_below_the_band():
+    up = [100.0] * 199 + [110.0]
+    assert B.RULES["trend"].entry(up, {"window": 200, "band": 0.0})
+    assert not B.RULES["trend"].entry(up[:150], {"window": 200, "band": 0.0})     # not enough history
+    flat = [100.0] * 200
+    assert not B.RULES["trend"].exit(flat[:-1] + [99.0], {"window": 200, "band": 0.02})  # inside the band
+    assert B.RULES["trend"].exit(flat[:-1] + [97.0], {"window": 200, "band": 0.02})

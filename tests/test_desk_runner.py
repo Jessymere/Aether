@@ -644,9 +644,8 @@ def test_when_every_rule_is_stood_down_the_candidate_is_skipped(
         desk_env, stub_brain, monkeypatch):
     import desk_backtest
 
-    seed_rule(connect(desk_env["db"]), "ma_cross")
-    seed_rule(connect(desk_env["db"]), "breakout")
-    seed_rule(connect(desk_env["db"]), "reversion")
+    for rule_id in desk_backtest.RULES:  # every rule, however many there are
+        seed_rule(connect(desk_env["db"]), rule_id)
     monkeypatch.setattr(desk_backtest, "evaluate",
                         lambda *a: pytest.fail("no rule should have been run"))
 

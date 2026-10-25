@@ -78,6 +78,9 @@ class Metrics:
     max_dd: float = 0.0
     ending_equity: float = 0.0
     starting_equity: float = 1.0
+    #: Drawdown marked to every close, open trades included. ``max_dd`` only
+    #: sees closed trades; this is the one comparable with holding.
+    mtm_dd: float = 0.0
 
     def as_dict(self) -> dict:
         return {
@@ -155,6 +158,20 @@ def _reversion_exit(closes: list[float], p: dict) -> bool:
     return closes[-1] >= sum(closes[-window:]) / window
 
 
+def _trend_entry(closes: list[float], p: dict) -> bool:
+    window, band = p.get("window", 200), p.get("band", 0.0)
+    if len(closes) < window:
+        return False
+    return closes[-1] > sum(closes[-window:]) / window * (1 + band)
+
+
+def _trend_exit(closes: list[float], p: dict) -> bool:
+    window, band = p.get("window", 200), p.get("band", 0.0)
+    if len(closes) < window:
+        return False
+    return closes[-1] < sum(closes[-window:]) / window * (1 - band)
+
+
 RULES: dict[str, Rule] = {
     "ma_cross": Rule(
         rule_id="ma_cross", entry=_ma_cross_entry, exit=_ma_cross_exit,
@@ -172,6 +189,11 @@ RULES: dict[str, Rule] = {
         rule_id="reversion", entry=_reversion_entry, exit=_reversion_exit,
         grid=[{"window": w, "z": z} for w, z in ((20, 1.5), (20, 2.0), (50, 2.0))],
         description="Buy N standard deviations below the mean, exit at the mean.",
+    ),
+    "trend": Rule(
+        rule_id="trend", entry=_trend_entry, exit=_trend_exit,
+        grid=[{"window": w, "band": b} for w in (100, 200) for b in (0.0, 0.02)],
+        description="Hold while price is above its long average (with a band), cash below it.",
     ),
 }
 
@@ -196,9 +218,13 @@ def replay(bars: list[Bar], rule: Rule, params: dict, *,
     entry_price = 0.0
     returns: list[float] = []
 
+    mtm_peak = starting_equity
     for i in range(1, len(bars) - 1):
         window = closes[:i + 1]
         nxt = bars[i + 1]
+        marked = equity * (1 + (closes[i] / entry_price - 1) * risk_pct) if in_position else equity
+        mtm_peak = max(mtm_peak, marked)
+        metrics.mtm_dd = max(metrics.mtm_dd, (mtm_peak - marked) / mtm_peak)
 
         if not in_position and rule.entry(window, params):
             entry_price = nxt.open * (1 + cost)
@@ -463,10 +489,13 @@ def evaluate(symbol: str, bars: list[Bar], rule: Rule, *,
 
     rule_return = hold.ending_equity / hold.starting_equity - 1
     hold_return = buy_and_hold(holdout, fees_bps=fees, slippage_bps=slippage)
+    passed, why = beats_benchmark(rule_return, hold.mtm_dd, hold_return, hold_drawdown(holdout))
     verdicts.append(Verdict(
         rule_id=rule.rule_id, symbol=symbol, verdict="benchmark",
-        passed=rule_return > hold_return, window=f"{holdout[0].ts}..{holdout[-1].ts}",
-        metrics={"rule_return": round(rule_return, 4), "buy_and_hold": round(hold_return, 4)},
+        passed=passed, window=f"{holdout[0].ts}..{holdout[-1].ts}",
+        metrics={"rule_return": round(rule_return, 4), "buy_and_hold": round(hold_return, 4),
+                 "rule_drawdown": round(hold.mtm_dd, 4),
+                 "hold_drawdown": round(hold_drawdown(holdout), 4), "basis": why},
     ))
 
     return all(v.passed for v in verdicts), verdicts
@@ -477,6 +506,36 @@ def buy_and_hold(bars: list[Bar], *, fees_bps: float = DESK_FEES_BPS,
     """Return of buying the first open and selling the last close, costs on both legs like ``replay``."""
     cost = (fees_bps + slippage_bps) / 10_000.0
     return bars[-1].close * (1 - cost) / (bars[0].open * (1 + cost)) - 1
+
+
+def hold_drawdown(bars: list[Bar]) -> float:
+    """Worst peak-to-trough fall of simply holding, close to close."""
+    peak, worst = 0.0, 0.0
+    for b in bars:
+        peak = max(peak, b.close)
+        worst = max(worst, (peak - b.close) / peak if peak else 0.0)
+    return worst
+
+
+#: Drawdown floor for the return/drawdown ratio: a rule that barely traded must
+#: not win on a near-zero denominator.
+_DD_FLOOR = 0.02
+
+
+def beats_benchmark(rule_return: float, rule_dd: float,
+                    hold_return: float, hold_dd: float) -> tuple[bool, str]:
+    """Out-earn holding, or earn more per unit of drawdown while still profitable.
+
+    The second door is for a rule that makes less than the market but falls
+    far less: risk-adjusted it is better, and that can be the point.
+    """
+    if rule_return > hold_return:
+        return True, "beat buy-and-hold"
+    rule_ratio = rule_return / max(rule_dd, _DD_FLOOR)
+    hold_ratio = hold_return / max(hold_dd, _DD_FLOOR)
+    if rule_return > 0 and rule_ratio > hold_ratio:
+        return True, f"better return per drawdown ({rule_ratio:.2f} vs {hold_ratio:.2f})"
+    return False, f"neither out-earned holding nor beat its return per drawdown ({rule_ratio:.2f} vs {hold_ratio:.2f})"
 
 
 def gate_symbol(symbol: str, bars: list[Bar],
