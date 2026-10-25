@@ -238,8 +238,12 @@ def _env_int(name: str, default: int) -> int:
 #: The trading judge uses OpenRouter by default. "socket" remains an explicit
 #: legacy option; "ollama" selects the configured chat-model path.
 DESK_BRAIN = _env_str("DESK_BRAIN", "openrouter").strip().lower()
-DESK_BRAIN_MODEL = _env_str("DESK_BRAIN_MODEL", MODELS["decider"])
-DESK_BRAIN_FALLBACK_MODEL = _env_str("DESK_BRAIN_FALLBACK_MODEL", "qwen3.5:4b")
+#: One pinned judge, not the "openrouter/free" router: the router picks a
+#: different model per call, so the same facts drew skip, hold and skip and no
+#: record could say whether the judge helps. The fallback is the same model on
+#: NIM, so a free-tier 429 or a cut-off reply does not swap in another opinion.
+DESK_BRAIN_MODEL = _env_str("DESK_BRAIN_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free")
+DESK_BRAIN_FALLBACK_MODEL = _env_str("DESK_BRAIN_FALLBACK_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")
 
 #: "paper" is the default and is never inferred from whether a key is present.
 DESK_EXECUTION_MODE = _env_str("DESK_EXECUTION_MODE", "paper").strip().lower()

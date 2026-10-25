@@ -189,7 +189,9 @@ class OllamaBrain:
                 self.model,
                 [{"role": "system", "content": SYSTEM},
                  {"role": "user", "content": prompt}],
-                json_mode=True, num_predict=120, api_key=api_key, surface=surface,
+                # Reasoning models spend tokens thinking before the JSON; at 120
+                # they were cut off mid-thought and every reply came back empty.
+                json_mode=True, num_predict=1500, api_key=api_key, surface=surface,
             )
             payload = _loads(raw)
         except Exception as exc:  # noqa: BLE001
@@ -197,6 +199,14 @@ class OllamaBrain:
                 symbol=symbol, action="skip", confidence=0.0, brain=self.name,
                 model=self.model, reason=f"brain unavailable: {exc}",
                 skipped_reason=f"brain unavailable: {exc}",
+            )
+        if "action" not in payload:
+            # Still a skip, but named, so the ledger never shows a broken reply
+            # as the judge's considered opinion.
+            return Decision(
+                symbol=symbol, action="skip", confidence=0.0, brain=self.name,
+                model=self.model, raw=payload, reason="judge reply unparseable",
+                skipped_reason="judge reply unparseable",
             )
 
         action = _coerce_action(payload.get("action"))
@@ -215,8 +225,19 @@ class OpenRouterBrain(OllamaBrain):
 
     name = "openrouter"
 
-    def __init__(self, model: str = DESK_BRAIN_MODEL) -> None:
+    def __init__(self, model: str = DESK_BRAIN_MODEL,
+                 fallback: str = DESK_BRAIN_FALLBACK_MODEL) -> None:
         super().__init__(model)
+        self.fallback = fallback
+
+    def decide(self, facts: dict[str, Any], symbol: str = "") -> Decision:
+        first = super().decide(facts, symbol)
+        unusable = first.skipped_reason.startswith(("brain unavailable", "judge reply unparseable"))
+        if not unusable or not self.fallback or self.fallback == self.model:
+            return first
+        second = OllamaBrain(self.fallback).decide(facts, symbol)
+        second.brain = self.name
+        return second
 
 
 class StubBrain:

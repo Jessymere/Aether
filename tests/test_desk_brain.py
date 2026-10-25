@@ -148,6 +148,46 @@ def test_json_loader_survives_garbage():
     assert DB._loads([1, 2]) == {}
 
 
+def test_an_empty_reply_is_named_unparseable_not_a_judged_skip(monkeypatch):
+    import ollama_client
+
+    monkeypatch.setattr(DB, "model_route", lambda m: ("", None, "local"))
+    monkeypatch.setattr(ollama_client, "chat", lambda *a, **k: "")  # cut off mid-thought
+    decision = DB.OllamaBrain("m").decide({}, symbol="X")
+    assert decision.action == "skip"
+    assert decision.skipped_reason == "judge reply unparseable"
+
+
+def test_openrouter_brain_retries_once_on_the_fallback_model(monkeypatch):
+    import ollama_client
+
+    monkeypatch.setattr(DB, "model_route", lambda m: ("", None, "local"))
+    asked = []
+
+    def chat(base, model, *a, **k):
+        asked.append(model)
+        if model == "primary":
+            raise RuntimeError("429")
+        return '{"action": "buy", "confidence": "high"}'
+
+    monkeypatch.setattr(ollama_client, "chat", chat)
+    decision = DB.OpenRouterBrain("primary", fallback="backup").decide({}, symbol="X")
+    assert asked == ["primary", "backup"]
+    assert decision.action == "buy" and decision.model == "backup"
+    assert decision.brain == "openrouter"
+
+
+def test_a_real_skip_does_not_trigger_the_fallback(monkeypatch):
+    import ollama_client
+
+    monkeypatch.setattr(DB, "model_route", lambda m: ("", None, "local"))
+    asked = []
+    monkeypatch.setattr(ollama_client, "chat",
+                        lambda base, model, *a, **k: asked.append(model) or '{"action": "skip", "confidence": "low"}')
+    DB.OpenRouterBrain("primary", fallback="backup").decide({}, symbol="X")
+    assert asked == ["primary"]
+
+
 def test_ollama_brain_degrades_to_skip_on_error(monkeypatch):
     import ollama_client
 
