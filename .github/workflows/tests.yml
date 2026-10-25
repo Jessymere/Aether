@@ -1,0 +1,21 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pytest:
+    # The app is Windows-only (os.startfile, toasts, the exe build), so test there.
+    runs-on: windows-latest
+    env:
+      DESK_ALERTS: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -r requirements.txt -r requirements-desk.txt pytest
+      - run: python -m pytest tests -q

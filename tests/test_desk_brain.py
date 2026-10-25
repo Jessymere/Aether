@@ -63,6 +63,7 @@ def test_stub_brain_records_a_skip_reason_for_non_buys():
 # make_brain routing — never inferred from a key being present
 # ---------------------------------------------------------------------------
 def test_make_brain_honours_an_explicit_choice(monkeypatch):
+    monkeypatch.setattr(DB, "GATEWAY_API_KEY", "key")  # not the developer's .env
     assert isinstance(DB.make_brain("ollama"), DB.OllamaBrain)
     assert isinstance(DB.make_brain("stub"), DB.StubBrain)
     assert isinstance(DB.make_brain("socket"), DB.SocketBrain)

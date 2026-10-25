@@ -261,6 +261,7 @@ def test_preflight_probes_the_gateway_too(monkeypatch) -> None:
     probed: list[str] = []
     monkeypatch.setattr(preflight, "detect_local_models", lambda: [])
     monkeypatch.setattr(preflight, "_reachable", lambda url: probed.append(url) or True)
+    monkeypatch.setattr(preflight.config, "GATEWAY_API_KEY", "key")  # not the developer's .env
 
     statuses = preflight.preflight({"seat": "gpt-6-luna-decisions"})
 
