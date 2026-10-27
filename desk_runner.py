@@ -757,10 +757,10 @@ class DeskRunner:
             open_now.add(cand.symbol)
             self._recent_fills[cand.symbol] = 1
             result.filled += 1
-            self._say(f"{venue}: BOUGHT {qty:g} {cand.symbol} @ {fill.price:g} "
+            self._say(f"{venue}: BOUGHT {fill.qty:g} {cand.symbol} @ {fill.price:g} "
                       f"(conf {decision.confidence:.2f})", "trade")
             notify(f"Aether desk [{broker.mode.upper()}] — BOUGHT {cand.symbol}",
-                   f"{qty:g} @ {fill.price:g} · {cand.rule_id} signal · judge {decision.confidence:.0%}")
+                   f"{fill.qty:g} @ {fill.price:g} · {cand.rule_id} signal · judge {decision.confidence:.0%}")
 
     def _skip(self, cand: Candidate, candidate_id: int, reason: str, check: str,
               result: DeskResult, decision: Optional[Decision] = None) -> None:
@@ -866,9 +866,15 @@ class DeskRunner:
                 self.panic(flatten=True, reason=kill.reason, keep_core=True)
                 break
 
-        result.positions = [_row(p, self._marks.get(p.symbol))
-                            for venue in self.venues
-                            for p in self._broker(venue).positions()]
+        # A real broker knows no stops; they live in the ledger.
+        limits = {(p.symbol, p.mode): (p.stop, p.take)
+                  for v in self.venues for p in open_positions(self.conn, self._broker(v).mode)}
+        result.positions = []
+        for venue in self.venues:
+            for p in self._broker(venue).positions():
+                stop, take = limits.get((p.symbol, p.mode), (p.stop, p.take))
+                result.positions.append(_row(replace(p, stop=stop, take=take),
+                                             self._marks.get(p.symbol)))
         for venue in self.venues:
             self._broker(venue)  # touch, keeps venues materialised
         # The effective dial, not the market dial: the UI shows what actually
